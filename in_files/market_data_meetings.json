@@ -1,0 +1,30 @@
+{
+  "meeting_schedule": [
+    { "date": "2026-06-11", "target_rate": 0.0425 },
+    { "date": "2026-07-30", "target_rate": 0.0425 },
+    { "date": "2026-09-17", "target_rate": 0.0400 },
+    { "date": "2026-11-05", "target_rate": 0.0450 }
+  ],
+  "ois_curve": [
+    { "date": "2026-11-19", "rate": 0.0365 },
+    { "date": "2027-05-19", "rate": 0.0385 },
+    { "date": "2029-05-19", "rate": 0.0415 },
+    { "date": "2031-05-19", "rate": 0.0430 }
+  ],
+  "market_data": [
+    {
+      "type": "DEPOSIT",
+      "startDate": "2026-05-19",
+      "maturityDate": "2026-06-17",
+      "rate": 0.0400,
+      "paymentFrequency": 12
+    },
+    {
+      "type": "FUTURE",
+      "startDate": "2026-06-17",
+      "maturityDate": "2026-09-16",
+      "price": 95.85,
+      "paymentFrequency": 4
+    }
+  ]
+}

@@ -1,0 +1,117 @@
+{
+  "meeting_schedule": [
+    { "date": "2026-05-20", "target_rate": 0.022504 },
+    { "date": "2026-05-28", "target_rate": 0.023129 },
+    { "date": "2026-07-09", "target_rate": 0.024876 },
+    { "date": "2026-09-03", "target_rate": 0.027054 },
+    { "date": "2026-10-29", "target_rate": 0.028675 },
+    { "date": "2026-12-10", "target_rate": 0.030829 },
+    { "date": "2027-02-11", "target_rate": 0.032578 },
+    { "date": "2027-03-18", "target_rate": 0.034205 },
+    { "date": "2027-05-06", "target_rate": 0.035198 }
+  ],
+  "ois_curve": [
+    { "date": "2028-05-19", "rate": 0.03405 },
+    { "date": "2029-05-19", "rate": 0.0363},
+    { "date": "2030-05-19", "rate": 0.0378},
+    { "date": "2031-05-19", "rate": 0.0389},
+    { "date": "2033-05-19", "rate": 0.04083},
+    { "date": "2036-05-19", "rate": 0.04294},
+    { "date": "2038-05-19", "rate": 0.04397},
+    { "date": "2041-05-19", "rate": 0.04545}
+  ],
+  "market_data": [
+
+    {
+      "type": "DEPOSIT",
+      "startDate": "2026-05-20",
+      "maturityDate": "2026-08-24",
+      "rate": 0.02645,
+      "paymentFrequency": 12
+    },
+    {
+      "type": "FUTURE",
+      "startDate": "2026-06-10",
+      "maturityDate": "2026-09-16",
+      "price": 97.30,
+      "paymentFrequency": 4
+    },
+    {
+      "type": "FUTURE",
+      "startDate": "2026-09-16",
+      "maturityDate": "2026-12-16",
+      "price": 96.92,
+      "paymentFrequency": 4
+    },
+    {
+      "type": "FUTURE",
+      "startDate": "2026-12-16",
+      "maturityDate": "2027-03-10",
+      "price": 96.54,
+      "paymentFrequency": 4
+    },
+    {
+      "type": "FUTURE",
+      "startDate": "2027-03-17",
+      "maturityDate": "2027-06-16",
+      "price": 96.24,
+      "paymentFrequency": 4
+    },
+    {
+      "type": "SWAP",
+      "startDate": "2026-05-22",
+      "maturityDate": "2028-05-22",
+      "rate": 0.036375,
+      "paymentFrequency": 2
+    },
+    {
+      "type": "SWAP",
+      "startDate": "2026-05-22",
+      "maturityDate": "2029-05-22",
+      "rate": 0.038425,
+      "paymentFrequency": 2
+    },
+    {
+      "type": "SWAP",
+      "startDate": "2026-05-22",
+      "maturityDate": "2030-05-22",
+      "rate": 0.0398,
+      "paymentFrequency": 2
+    },
+    {
+      "type": "SWAP",
+      "startDate": "2026-05-22",
+      "maturityDate": "2031-05-22",
+      "rate": 0.04085,
+      "paymentFrequency": 2
+    },
+    {
+      "type": "SWAP",
+      "startDate": "2026-05-22",
+      "maturityDate": "2033-05-23",
+      "rate": 0.0426,
+      "paymentFrequency": 2
+    },
+    {
+      "type": "SWAP",
+      "startDate": "2026-05-22",
+      "maturityDate": "2036-05-22",
+      "rate": 0.044575,
+      "paymentFrequency": 2
+    },
+    {
+      "type": "SWAP",
+      "startDate": "2026-05-22",
+      "maturityDate": "2038-05-24",
+      "rate": 0.045575,
+      "paymentFrequency": 2
+    },
+    {
+      "type": "SWAP",
+      "startDate": "2026-05-22",
+      "maturityDate": "2041-05-22",
+      "rate": 0.046925,
+      "paymentFrequency": 2
+    }
+  ]
+}

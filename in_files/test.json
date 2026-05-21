@@ -1,0 +1,14 @@
+{
+  "meeting_schedule": [
+    { "date": "2026-06-15", "target_rate": 0.0425 }
+  ],
+  "ois_curve": [
+    { "date": "2026-05-22", "rate": 0.0350 },
+    { "date": "2027-05-22", "rate": 0.0375 }
+  ],
+  "market_data": [
+    { "type": "DEPOSIT", "startDate": "2026-05-21", "maturityDate": "2026-08-21", "rate": 0.0400 },
+    { "type": "FUTURE", "startDate": "2026-06-17", "maturityDate": "2026-09-17", "price": 95.75 },
+    { "type": "SWAP", "startDate": "2026-05-21", "maturityDate": "2028-05-21", "rate": 0.0450, "paymentFrequency": 2 }
+  ]
+}
