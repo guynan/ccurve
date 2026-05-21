@@ -11,6 +11,6 @@ all:
 
 
 blob:
-	gcc -std=c99 -O3 $(CFLAGS) $(DEBUG_FLAGS) dual_curve.c  -lm
+	gcc -std=c99 -O3 $(CFLAGS) $(DEBUG_FLAGS) dual_curve.c date_utils.c  -lm
 
         
