@@ -129,6 +129,10 @@ typedef struct {
 /*  Function declarations                                              */
 /* ================================================================== */
 
+/* OIS robustness: anchor short-end rate and insert continuity node */
+void setOisAnchorRate(InterestRateCurve *oisCurve, double anchorRate);
+void anchorOisAtCbBoundary(InterestRateCurve *oisCurve);
+
 /* Bootstrap engine.
  * Returns 0 on success, -1 if MAX_NODES would be exceeded.
  * params == NULL → use built-in three-regime default layout. */

@@ -299,6 +299,54 @@ CurveConstructionParams curveParamsMonotoneConvexOnly(void)
 }
 
 /* ================================================================== */
+/*  OIS robustness helpers                                             */
+/* ================================================================== */
+
+void setOisAnchorRate(InterestRateCurve *oisCurve, double anchorRate)
+{
+    oisCurve->rates[0] = anchorRate;
+    if (oisCurve->numNodes > 0)
+        oisCurve->dfs[0] = 1.0;   /* t=0 always has DF=1 */
+}
+
+void anchorOisAtCbBoundary(InterestRateCurve *oisCurve)
+{
+    if (oisCurve->cbSchedule.numMeetings <= 0) return;
+    if (oisCurve->numNodes >= MAX_NODES) return;
+
+    int32_t nm = oisCurve->cbSchedule.numMeetings;
+    double  t_cb = oisCurve->cbSchedule.meetingTimes[nm - 1];
+    double  df_cb = getStepWiseDiscountFactor(oisCurve, t_cb);
+
+    /* Find insertion index: first node strictly after t_cb */
+    int32_t k = oisCurve->numNodes;
+    for (int32_t i = 0; i < oisCurve->numNodes; i++) {
+        if (oisCurve->times[i] > t_cb + 1e-9) { k = i; break; }
+    }
+
+    /* If a node already exists at t_cb (within tolerance), just update it */
+    if (k > 0 && fabs(oisCurve->times[k - 1] - t_cb) < 1e-9) {
+        oisCurve->dfs[k - 1]   = df_cb;
+        oisCurve->rates[k - 1] = (t_cb > 0.0) ? (-log(df_cb) / t_cb) : 0.0;
+        setupMonotoneConvex(oisCurve);
+        return;
+    }
+
+    /* Shift all nodes from k onward up by one slot */
+    for (int32_t i = oisCurve->numNodes; i > k; i--) {
+        oisCurve->times[i] = oisCurve->times[i - 1];
+        oisCurve->rates[i] = oisCurve->rates[i - 1];
+        oisCurve->dfs[i]   = oisCurve->dfs[i - 1];
+    }
+
+    oisCurve->times[k] = t_cb;
+    oisCurve->dfs[k]   = df_cb;
+    oisCurve->rates[k] = (t_cb > 0.0) ? (-log(df_cb) / t_cb) : 0.0;
+    oisCurve->numNodes++;
+    setupMonotoneConvex(oisCurve);
+}
+
+/* ================================================================== */
 /*  Basis curve                                                        */
 /* ================================================================== */
 
@@ -508,10 +556,30 @@ void run_calibration_bridge(InterestRateCurve *fwdCurve,
 {
     memset(fwdCurve, 0, sizeof(InterestRateCurve));
 
-    /* Default OIS curve regime: log-linear over the full term */
-    oisCurve->regimes[0].upper_time_boundary = 100.0;
-    oisCurve->regimes[0].interp_func         = interpolateLogLinearDf;
-    oisCurve->numRegimes = 1;
+    /* Anchor OIS short end to deposit rate and insert CB boundary node */
+    for (int32_t i = 0; i < numInstruments; i++) {
+        if (instruments[i].type == DEPOSIT) {
+            setOisAnchorRate(oisCurve, instruments[i].rate);
+            break;
+        }
+    }
+    if (oisCurve->cbSchedule.numMeetings > 0)
+        anchorOisAtCbBoundary(oisCurve);
+
+    /* OIS curve regime: stepwise CB zone → log-linear long end */
+    if (oisCurve->cbSchedule.numMeetings > 0) {
+        double t_cb = oisCurve->cbSchedule.meetingTimes[
+                          oisCurve->cbSchedule.numMeetings - 1];
+        oisCurve->regimes[0].upper_time_boundary = t_cb;
+        oisCurve->regimes[0].interp_func         = interpolateStepWiseDF;
+        oisCurve->regimes[1].upper_time_boundary = 100.0;
+        oisCurve->regimes[1].interp_func         = interpolateLogLinearDf;
+        oisCurve->numRegimes = 2;
+    } else {
+        oisCurve->regimes[0].upper_time_boundary = 100.0;
+        oisCurve->regimes[0].interp_func         = interpolateLogLinearDf;
+        oisCurve->numRegimes = 1;
+    }
 
     bootstrapCurve(fwdCurve, oisCurve, instruments, numInstruments, NULL);
 }
@@ -585,7 +653,15 @@ int32_t main(int32_t argc, char **argv)
     printf("-> OIS curve nodes:      %d\n", oisCurve.numNodes);
     printf("-> Market instruments:   %d\n", numInstruments);
 
-    oisCurve.rates[0] = 0.022500;
+    /* Anchor OIS short end to deposit rate and ensure continuity at CB boundary */
+    for (int32_t i = 0; i < numInstruments; i++) {
+        if (marketData[i].type == DEPOSIT) {
+            setOisAnchorRate(&oisCurve, marketData[i].rate);
+            break;
+        }
+    }
+    if (oisCurve.cbSchedule.numMeetings > 0)
+        anchorOisAtCbBoundary(&oisCurve);
 
     double finalMeetingTime =
         oisCurve.cbSchedule.meetingTimes[oisCurve.cbSchedule.numMeetings - 1];
