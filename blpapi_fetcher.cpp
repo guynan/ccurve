@@ -1041,4 +1041,178 @@ int blp_fetch_curve_instruments(BlpSession       *s,
     return written;
 }
 
+
+/* ======================================================================== */
+/*  NZD BKBM curve instrument fetch                                          */
+/* ======================================================================== */
+
+int blp_fetch_nzd_curve_instruments(BlpSession       *s,
+                                     MarketInstrument *out,
+                                     int               max_instruments,
+                                     const char       *as_of_date)
+{
+    if (!s || !s->connected || !out || max_instruments <= 0 || !as_of_date)
+        return -1;
+
+    /* Instrument type tag used to set conventions without classify_ticker */
+    enum NzdType { NZD_DEPOSIT, NZD_FUTURE, NZD_SWAP };
+
+    struct NzdSpec {
+        const char *ticker;
+        NzdType     itype;
+        double      tenor_y;  /* pre-known tenor for deposit/swap; 0 for futures */
+    };
+
+    /*
+     * Ordering determines bootstrap sequence:
+     *   [0]      Deposit  (3M)
+     *   [1–4]    ZB futures (quarterly, ~3M–15M)
+     *   [5–13]   Swaps  (2, 3, 4, 5, 6, 7, 10, 12, 15Y)
+     */
+    static const NzdSpec SPECS[] = {
+        { "NDBB3M Curncy",   NZD_DEPOSIT, 0.25  },
+        { "ZB1 Comdty",      NZD_FUTURE,  0.0   },
+        { "ZB2 Comdty",      NZD_FUTURE,  0.0   },
+        { "ZB3 Comdty",      NZD_FUTURE,  0.0   },
+        { "ZB4 Comdty",      NZD_FUTURE,  0.0   },
+        { "NDSWAP2 Curncy",  NZD_SWAP,    2.0   },
+        { "NDSWAP3 Curncy",  NZD_SWAP,    3.0   },
+        { "NDSWAP4 Curncy",  NZD_SWAP,    4.0   },
+        { "NDSWAP5 Curncy",  NZD_SWAP,    5.0   },
+        { "NDSWAP6 Curncy",  NZD_SWAP,    6.0   },
+        { "NDSWAP7 Curncy",  NZD_SWAP,    7.0   },
+        { "NDSWAP10 Curncy", NZD_SWAP,    10.0  },
+        { "NDSWAP12 Curncy", NZD_SWAP,    12.0  },
+        { "NDSWAP15 Curncy", NZD_SWAP,    15.0  },
+    };
+    static constexpr int NSPECS =
+        static_cast<int>(sizeof(SPECS) / sizeof(SPECS[0]));
+
+    const int n_to_fetch = std::min(NSPECS, max_instruments);
+
+    const char *ticker_ptrs[NSPECS + 1];
+    for (int i = 0; i < n_to_fetch; ++i)
+        ticker_ptrs[i] = SPECS[i].ticker;
+    ticker_ptrs[n_to_fetch] = nullptr;
+
+    const char *fields[] = { "MID", "PX_LAST", "LAST_TRADEABLE_DT", nullptr };
+
+    int nresults = 0;
+    BlpRefResult *raw = blp_fetch_bdp(s, ticker_ptrs, fields,
+                                       &nresults, 0 /* default timeout */);
+    if (!raw || nresults == 0) {
+        blp_free(raw);
+        return -1;
+    }
+
+    const DateTime as_of = parseDateString(as_of_date);
+    if (as_of.year == 0) { blp_free(raw); return -1; }
+
+    struct ParsedResult {
+        double rate;
+        double price;
+        char   ltd_str[64];
+        bool   rate_ok;
+        bool   ltd_ok;
+    };
+
+    std::vector<ParsedResult> parsed(static_cast<std::size_t>(n_to_fetch));
+    for (int i = 0; i < n_to_fetch; ++i) {
+        parsed[static_cast<std::size_t>(i)] = { 0.0, 0.0, {'\0'}, false, false };
+    }
+
+    for (int ri = 0; ri < nresults; ++ri) {
+        const BlpRefResult &r = raw[ri];
+        int spec_idx = -1;
+        for (int i = 0; i < n_to_fetch; ++i) {
+            if (std::strcmp(r.ticker, SPECS[i].ticker) == 0) {
+                spec_idx = i; break;
+            }
+        }
+        if (spec_idx < 0 || !r.ok) continue;
+
+        ParsedResult &pr    = parsed[static_cast<std::size_t>(spec_idx)];
+        const std::string f = r.field;
+
+        if (f == "MID") {
+            pr.rate    = r.value / 100.0;   /* Bloomberg quotes rates in percent */
+            pr.rate_ok = true;
+        } else if (f == "PX_LAST") {
+            pr.price   = r.value;           /* futures price already in [90,100] */
+            pr.rate_ok = true;
+        } else if (f == "LAST_TRADEABLE_DT") {
+            safe_copy(pr.ltd_str, sizeof(pr.ltd_str), r.str_value);
+            pr.ltd_ok = (pr.ltd_str[0] != '\0');
+        }
+    }
+
+    blp_free(raw);
+
+    int written = 0;
+
+    for (int i = 0; i < n_to_fetch && written < max_instruments; ++i) {
+        const NzdSpec  &spec = SPECS[i];
+        ParsedResult   &pr   = parsed[static_cast<std::size_t>(i)];
+
+        if (!pr.rate_ok) continue;
+
+        MarketInstrument &inst = out[written];
+        std::memset(&inst, 0, sizeof(MarketInstrument));
+
+        /* NZD common conventions */
+        inst.fixedDcf = DCF_ACT_365;
+        inst.floatDcf = DCF_ACT_365;
+        inst.bda      = BDA_MODIFIED_FOLLOWING;
+        safe_copy(inst.calendarName, sizeof(inst.calendarName), "NZD");
+
+        switch (spec.itype) {
+
+        case NZD_DEPOSIT:
+            inst.type             = DEPOSIT;
+            inst.startTime        = 0.0;
+            inst.maturity         = spec.tenor_y;
+            inst.rate             = pr.rate;
+            inst.paymentFrequency = 4;
+            break;
+
+        case NZD_FUTURE:
+        {
+            inst.type  = FUTURE;
+            inst.price = pr.price;
+
+            double maturity_yf = 0.0;
+            if (pr.ltd_ok) {
+                const DateTime ltd = parse_blp_date_string(pr.ltd_str);
+                if (ltd.year > 0)
+                    maturity_yf = calculateYearFraction(as_of, ltd);
+            }
+            if (maturity_yf <= 0.0) {
+                /* Fallback: ZB1≈Q1, ZB2≈Q2, ... — digit at position 2 */
+                const char d = spec.ticker[2];
+                const int  q = (d >= '1' && d <= '9') ? (d - '0') : 1;
+                maturity_yf  = static_cast<double>(q) * 0.25;
+            }
+
+            inst.maturity         = maturity_yf;
+            inst.startTime        = std::max(0.0, maturity_yf - 0.25);
+            inst.paymentFrequency = 4;
+            break;
+        }
+
+        case NZD_SWAP:
+            inst.type             = SWAP;
+            inst.startTime        = 0.0;
+            inst.maturity         = spec.tenor_y;
+            inst.rate             = pr.rate;
+            inst.paymentFrequency = 4;   /* quarterly BKBM */
+            break;
+        }
+
+        ++written;
+    }
+
+    return written;
+}
+
+
 } /* extern "C" */
