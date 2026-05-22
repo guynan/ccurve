@@ -306,7 +306,7 @@ void setOisAnchorRate(InterestRateCurve *oisCurve, double anchorRate)
 {
     oisCurve->rates[0] = anchorRate;
     if (oisCurve->numNodes > 0)
-        oisCurve->dfs[0] = 1.0;   /* t=0 always has DF=1 */
+        oisCurve->dfs[0] = exp(-anchorRate * oisCurve->times[0]);
 }
 
 void anchorOisAtCbBoundary(InterestRateCurve *oisCurve)
