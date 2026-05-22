@@ -31,8 +31,7 @@
  * ------------------------------------------------------------------ */
 #include "xccy_swap.h"
 
-/* Forward declaration – implemented in dual_curve.c */
-extern double getDiscountFactor(InterestRateCurve *curve, double t);
+/* getDiscountFactor is declared (const-correct) in interp.h via dual_curve.h */
 
 /* ================================================================
  * Internal helpers
