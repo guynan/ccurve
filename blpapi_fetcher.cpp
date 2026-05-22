@@ -1043,7 +1043,7 @@ int blp_fetch_curve_instruments(BlpSession       *s,
 
 
 /* ======================================================================== */
-/*  NZD BKBM curve instrument fetch                                          */
+/*  NZD dual-curve instrument fetch                                          */
 /* ======================================================================== */
 
 int blp_fetch_nzd_curve_instruments(BlpSession       *s,
@@ -1054,36 +1054,55 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
     if (!s || !s->connected || !out || max_instruments <= 0 || !as_of_date)
         return -1;
 
-    /* Instrument type tag used to set conventions without classify_ticker */
-    enum NzdType { NZD_DEPOSIT, NZD_FUTURE, NZD_SWAP };
+    enum NzdType { NZD_OIS, NZD_DEPOSIT, NZD_FUTURE, NZD_SWAP };
 
     struct NzdSpec {
         const char *ticker;
         NzdType     itype;
-        double      tenor_y;  /* pre-known tenor for deposit/swap; 0 for futures */
+        double      tenor_y;   /* explicit tenor for NDSO/NDSWAP/NDBB3M; 0 otherwise */
+        int         meeting_n; /* NDSF fallback: N/7 years; 0 for non-meeting */
     };
 
     /*
-     * Ordering determines bootstrap sequence:
-     *   [0]      Deposit  (3M)
-     *   [1–4]    ZB futures (quarterly, ~3M–15M)
-     *   [5–13]   Swaps  (2, 3, 4, 5, 6, 7, 10, 12, 15Y)
+     * OIS curve (tagged OIS_SWAP):
+     *   [0–5]    NDSF1A–6A     meeting-dated NZONIA (maturity from Bloomberg)
+     *   [6–13]   NDSO3–15      year-tenor NZONIA swaps
+     * BKBM forward curve (DEPOSIT/FUTURE/SWAP):
+     *   [14]     NDBB3M        3M BKBM deposit
+     *   [15–18]  ZB1–4         ASX bank bill futures
+     *   [19–26]  NDSWAP3–15    quarterly BKBM IRS
      */
     static const NzdSpec SPECS[] = {
-        { "NDBB3M Curncy",   NZD_DEPOSIT, 0.25  },
-        { "ZB1 Comdty",      NZD_FUTURE,  0.0   },
-        { "ZB2 Comdty",      NZD_FUTURE,  0.0   },
-        { "ZB3 Comdty",      NZD_FUTURE,  0.0   },
-        { "ZB4 Comdty",      NZD_FUTURE,  0.0   },
-        { "NDSWAP2 Curncy",  NZD_SWAP,    2.0   },
-        { "NDSWAP3 Curncy",  NZD_SWAP,    3.0   },
-        { "NDSWAP4 Curncy",  NZD_SWAP,    4.0   },
-        { "NDSWAP5 Curncy",  NZD_SWAP,    5.0   },
-        { "NDSWAP6 Curncy",  NZD_SWAP,    6.0   },
-        { "NDSWAP7 Curncy",  NZD_SWAP,    7.0   },
-        { "NDSWAP10 Curncy", NZD_SWAP,    10.0  },
-        { "NDSWAP12 Curncy", NZD_SWAP,    12.0  },
-        { "NDSWAP15 Curncy", NZD_SWAP,    15.0  },
+        /* Meeting-dated NZONIA (short end of OIS curve) */
+        { "NDSF1A Curncy",   NZD_OIS,     0.0,  1 },
+        { "NDSF2A Curncy",   NZD_OIS,     0.0,  2 },
+        { "NDSF3A Curncy",   NZD_OIS,     0.0,  3 },
+        { "NDSF4A Curncy",   NZD_OIS,     0.0,  4 },
+        { "NDSF5A Curncy",   NZD_OIS,     0.0,  5 },
+        { "NDSF6A Curncy",   NZD_OIS,     0.0,  6 },
+        /* Year-tenor NZONIA swaps (long end of OIS curve) */
+        { "NDSO3 Curncy",    NZD_OIS,     3.0,  0 },
+        { "NDSO4 Curncy",    NZD_OIS,     4.0,  0 },
+        { "NDSO5 Curncy",    NZD_OIS,     5.0,  0 },
+        { "NDSO6 Curncy",    NZD_OIS,     6.0,  0 },
+        { "NDSO7 Curncy",    NZD_OIS,     7.0,  0 },
+        { "NDSO10 Curncy",   NZD_OIS,     10.0, 0 },
+        { "NDSO12 Curncy",   NZD_OIS,     12.0, 0 },
+        { "NDSO15 Curncy",   NZD_OIS,     15.0, 0 },
+        /* BKBM forward curve */
+        { "NDBB3M Curncy",   NZD_DEPOSIT, 0.25, 0 },
+        { "ZB1 Comdty",      NZD_FUTURE,  0.0,  0 },
+        { "ZB2 Comdty",      NZD_FUTURE,  0.0,  0 },
+        { "ZB3 Comdty",      NZD_FUTURE,  0.0,  0 },
+        { "ZB4 Comdty",      NZD_FUTURE,  0.0,  0 },
+        { "NDSWAP3 Curncy",  NZD_SWAP,    3.0,  0 },
+        { "NDSWAP4 Curncy",  NZD_SWAP,    4.0,  0 },
+        { "NDSWAP5 Curncy",  NZD_SWAP,    5.0,  0 },
+        { "NDSWAP6 Curncy",  NZD_SWAP,    6.0,  0 },
+        { "NDSWAP7 Curncy",  NZD_SWAP,    7.0,  0 },
+        { "NDSWAP10 Curncy", NZD_SWAP,    10.0, 0 },
+        { "NDSWAP12 Curncy", NZD_SWAP,    12.0, 0 },
+        { "NDSWAP15 Curncy", NZD_SWAP,    15.0, 0 },
     };
     static constexpr int NSPECS =
         static_cast<int>(sizeof(SPECS) / sizeof(SPECS[0]));
@@ -1095,7 +1114,9 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
         ticker_ptrs[i] = SPECS[i].ticker;
     ticker_ptrs[n_to_fetch] = nullptr;
 
-    const char *fields[] = { "MID", "PX_LAST", "LAST_TRADEABLE_DT", nullptr };
+    const char *fields[] = {
+        "MID", "PX_LAST", "LAST_TRADEABLE_DT", "MATURITY", nullptr
+    };
 
     int nresults = 0;
     BlpRefResult *raw = blp_fetch_bdp(s, ticker_ptrs, fields,
@@ -1111,14 +1132,25 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
     struct ParsedResult {
         double rate;
         double price;
-        char   ltd_str[64];
+        char   ltd_str[64];  /* LAST_TRADEABLE_DT for futures              */
+        char   mat_str[64];  /* MATURITY for OIS; also fallback for futures */
         bool   rate_ok;
+        bool   price_ok;
         bool   ltd_ok;
+        bool   mat_ok;
     };
 
     std::vector<ParsedResult> parsed(static_cast<std::size_t>(n_to_fetch));
     for (int i = 0; i < n_to_fetch; ++i) {
-        parsed[static_cast<std::size_t>(i)] = { 0.0, 0.0, {'\0'}, false, false };
+        ParsedResult &pr = parsed[static_cast<std::size_t>(i)];
+        pr.rate      = 0.0;
+        pr.price     = 0.0;
+        pr.rate_ok   = false;
+        pr.price_ok  = false;
+        pr.ltd_ok    = false;
+        pr.mat_ok    = false;
+        pr.ltd_str[0] = '\0';
+        pr.mat_str[0] = '\0';
     }
 
     for (int ri = 0; ri < nresults; ++ri) {
@@ -1131,18 +1163,21 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
         }
         if (spec_idx < 0 || !r.ok) continue;
 
-        ParsedResult &pr    = parsed[static_cast<std::size_t>(spec_idx)];
+        ParsedResult    &pr = parsed[static_cast<std::size_t>(spec_idx)];
         const std::string f = r.field;
 
         if (f == "MID") {
-            pr.rate    = r.value / 100.0;   /* Bloomberg quotes rates in percent */
+            pr.rate    = r.value / 100.0;
             pr.rate_ok = true;
         } else if (f == "PX_LAST") {
-            pr.price   = r.value;           /* futures price already in [90,100] */
-            pr.rate_ok = true;
+            pr.price    = r.value;
+            pr.price_ok = true;
         } else if (f == "LAST_TRADEABLE_DT") {
             safe_copy(pr.ltd_str, sizeof(pr.ltd_str), r.str_value);
             pr.ltd_ok = (pr.ltd_str[0] != '\0');
+        } else if (f == "MATURITY" && !pr.mat_ok) {
+            safe_copy(pr.mat_str, sizeof(pr.mat_str), r.str_value);
+            pr.mat_ok = (pr.mat_str[0] != '\0');
         }
     }
 
@@ -1151,15 +1186,12 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
     int written = 0;
 
     for (int i = 0; i < n_to_fetch && written < max_instruments; ++i) {
-        const NzdSpec  &spec = SPECS[i];
-        ParsedResult   &pr   = parsed[static_cast<std::size_t>(i)];
-
-        if (!pr.rate_ok) continue;
+        const NzdSpec &spec = SPECS[i];
+        ParsedResult  &pr   = parsed[static_cast<std::size_t>(i)];
 
         MarketInstrument &inst = out[written];
         std::memset(&inst, 0, sizeof(MarketInstrument));
 
-        /* NZD common conventions */
         inst.fixedDcf = DCF_ACT_365;
         inst.floatDcf = DCF_ACT_365;
         inst.bda      = BDA_MODIFIED_FOLLOWING;
@@ -1167,7 +1199,36 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
 
         switch (spec.itype) {
 
+        case NZD_OIS:
+        {
+            if (!pr.rate_ok) continue;
+            /*
+             * Maturity from Bloomberg MATURITY field.
+             * Fallback for NDSF (meeting-dated): meeting_n / 7 years.
+             * Fallback for NDSO (year-tenor):    tenor_y.
+             */
+            double maturity_yf = 0.0;
+            if (pr.mat_ok) {
+                const DateTime mat = parse_blp_date_string(pr.mat_str);
+                if (mat.year > 0)
+                    maturity_yf = calculateYearFraction(as_of, mat);
+            }
+            if (maturity_yf <= 0.0) {
+                maturity_yf = (spec.tenor_y > 0.0)
+                    ? spec.tenor_y
+                    : static_cast<double>(spec.meeting_n) / 7.0;
+            }
+
+            inst.type             = OIS_SWAP;
+            inst.startTime        = 0.0;
+            inst.maturity         = maturity_yf;
+            inst.rate             = pr.rate;
+            inst.paymentFrequency = 4;
+            break;
+        }
+
         case NZD_DEPOSIT:
+            if (!pr.rate_ok) continue;
             inst.type             = DEPOSIT;
             inst.startTime        = 0.0;
             inst.maturity         = spec.tenor_y;
@@ -1177,9 +1238,7 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
 
         case NZD_FUTURE:
         {
-            inst.type  = FUTURE;
-            inst.price = pr.price;
-
+            if (!pr.price_ok) continue;
             double maturity_yf = 0.0;
             if (pr.ltd_ok) {
                 const DateTime ltd = parse_blp_date_string(pr.ltd_str);
@@ -1187,19 +1246,21 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
                     maturity_yf = calculateYearFraction(as_of, ltd);
             }
             if (maturity_yf <= 0.0) {
-                /* Fallback: ZB1≈Q1, ZB2≈Q2, ... — digit at position 2 */
+                /* Fallback: ZB1≈Q1, ZB2≈Q2 — digit at position 2 */
                 const char d = spec.ticker[2];
                 const int  q = (d >= '1' && d <= '9') ? (d - '0') : 1;
                 maturity_yf  = static_cast<double>(q) * 0.25;
             }
-
-            inst.maturity         = maturity_yf;
+            inst.type             = FUTURE;
             inst.startTime        = std::max(0.0, maturity_yf - 0.25);
+            inst.maturity         = maturity_yf;
+            inst.price            = pr.price;
             inst.paymentFrequency = 4;
             break;
         }
 
         case NZD_SWAP:
+            if (!pr.rate_ok) continue;
             inst.type             = SWAP;
             inst.startTime        = 0.0;
             inst.maturity         = spec.tenor_y;
