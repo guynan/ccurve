@@ -220,27 +220,30 @@ int blp_fetch_curve_instruments(BlpSession       *s,
                                 const char       *as_of_date);
 
 /* ======================================================================== */
-/*  Convenience: NZD BKBM curve instrument fetch                             */
+/*  Convenience: NZD dual-curve instrument fetch                             */
 /* ======================================================================== */
 
 /**
- * Fetch a complete NZD BKBM curve instrument set from Bloomberg in a single
- * BDP request and populate a MarketInstrument array ready for use with
- * bootstrapOisCurve() (single-curve, self-discounted) or bootstrapCurve()
- * with a separate OIS discount curve.
+ * Fetch a complete NZD dual-curve instrument set from Bloomberg and populate
+ * a MarketInstrument array for use with bootstrapOisCurve() (OIS leg) and
+ * bootstrapCurve() (BKBM forward leg discounted by NZONIA OIS).
+ *
+ * NZD has a liquid NZONIA OIS market, so proper dual-curve construction is
+ * used: the OIS curve is bootstrapped from meeting-dated NZONIA swaps and
+ * the BKBM forward curve is bootstrapped from BKBM IRS discounted off OIS.
  *
  * Instrument universe (14 instruments, in bootstrap order):
- *   Deposit : NDBB3M Curncy            (MID)              — 3M BKBM bank bill
- *   Futures : ZB1–ZB4 Comdty           (PX_LAST, LAST_TRADEABLE_DT)
- *   Swaps   : NDSWAP{2,3,4,5,6,7,10,12,15} Curncy (MID)  — quarterly BKBM IRS
+ *   OIS swaps : NDSF{1..6}A Curncy (MID, MATURITY) — meeting-dated NZONIA
+ *   BKBM IRS  : NDSWAP{3,4,5,6,7,10,12,15} Curncy (MID) — quarterly BKBM
  *
- * NZD market conventions applied:
- *   Deposit : fixedDcf=DCF_ACT_365, bda=BDA_MODIFIED_FOLLOWING, cal="NZD"
- *   Futures : startTime = maturity - 0.25 (90-day bank bill),
- *             fixedDcf=DCF_ACT_365, bda=BDA_MODIFIED_FOLLOWING, cal="NZD"
- *   Swaps   : paymentFrequency=4 (quarterly both legs, BKBM float),
- *             fixedDcf=DCF_ACT_365, floatDcf=DCF_ACT_365,
- *             bda=BDA_MODIFIED_FOLLOWING, cal="NZD"
+ * Instruments are tagged by type so the caller can split them:
+ *   OIS_SWAP  → bootstrap the NZONIA discount curve
+ *   SWAP      → bootstrap the BKBM forward curve (discount = NZONIA)
+ *
+ * NZD market conventions applied (both curve legs):
+ *   fixedDcf=DCF_ACT_365, floatDcf=DCF_ACT_365,
+ *   bda=BDA_MODIFIED_FOLLOWING, cal="NZD"
+ *   BKBM IRS paymentFrequency=4 (quarterly)
  *
  * @param s               Connected BlpSession.
  * @param out             Caller-supplied MarketInstrument array.
