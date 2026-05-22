@@ -1059,38 +1059,50 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
     struct NzdSpec {
         const char *ticker;
         NzdType     itype;
-        double      tenor_y;  /* pre-known tenor; 0 for futures (from LTD) */
+        double      tenor_y;   /* explicit tenor for NDSO/NDSWAP/NDBB3M; 0 otherwise */
+        int         meeting_n; /* NDSF fallback: N/7 years; 0 for non-meeting */
     };
 
     /*
-     * OIS instruments first (tagged OIS_SWAP), then BKBM instruments
-     * (DEPOSIT, FUTURE, SWAP) in bootstrap order.  The caller splits by type.
-     *
-     *   [0–5]    NDSF1A–6A    OIS_SWAP  — meeting-dated NZONIA
-     *   [6]      NDBB3M       DEPOSIT   — 3M BKBM bank bill
-     *   [7–10]   ZB1–ZB4      FUTURE    — ASX 90-day bank bill futures
-     *   [11–18]  NDSWAP3–15   SWAP      — quarterly BKBM IRS
+     * OIS curve (tagged OIS_SWAP):
+     *   [0–5]    NDSF1A–6A     meeting-dated NZONIA (maturity from Bloomberg)
+     *   [6–13]   NDSO3–15      year-tenor NZONIA swaps
+     * BKBM forward curve (DEPOSIT/FUTURE/SWAP):
+     *   [14]     NDBB3M        3M BKBM deposit
+     *   [15–18]  ZB1–4         ASX bank bill futures
+     *   [19–26]  NDSWAP3–15    quarterly BKBM IRS
      */
     static const NzdSpec SPECS[] = {
-        { "NDSO1 Curncy",     NZD_OIS,     1.0  },
-        { "NDSO2 Curncy",     NZD_OIS,     2.0  },
-        { "NDSO3 Curncy",     NZD_OIS,     3.0  },
-        { "NDSO4 Curncy",     NZD_OIS,     4.0  },
-        { "NDSO5 Curncy",     NZD_OIS,     5.0  },
-        { "NDSO6 Curncy",     NZD_OIS,     6.0  },
-        { "NDBB3M Curncy",   NZD_DEPOSIT, 0.25 },
-        { "ZB1 Comdty",      NZD_FUTURE,  0.0  },
-        { "ZB2 Comdty",      NZD_FUTURE,  0.0  },
-        { "ZB3 Comdty",      NZD_FUTURE,  0.0  },
-        { "ZB4 Comdty",      NZD_FUTURE,  0.0  },
-        { "NDSWAP3 Curncy",  NZD_SWAP,    3.0  },
-        { "NDSWAP4 Curncy",  NZD_SWAP,    4.0  },
-        { "NDSWAP5 Curncy",  NZD_SWAP,    5.0  },
-        { "NDSWAP6 Curncy",  NZD_SWAP,    6.0  },
-        { "NDSWAP7 Curncy",  NZD_SWAP,    7.0  },
-        { "NDSWAP10 Curncy", NZD_SWAP,    10.0 },
-        { "NDSWAP12 Curncy", NZD_SWAP,    12.0 },
-        { "NDSWAP15 Curncy", NZD_SWAP,    15.0 },
+        /* Meeting-dated NZONIA (short end of OIS curve) */
+        { "NDSF1A Curncy",   NZD_OIS,     0.0,  1 },
+        { "NDSF2A Curncy",   NZD_OIS,     0.0,  2 },
+        { "NDSF3A Curncy",   NZD_OIS,     0.0,  3 },
+        { "NDSF4A Curncy",   NZD_OIS,     0.0,  4 },
+        { "NDSF5A Curncy",   NZD_OIS,     0.0,  5 },
+        { "NDSF6A Curncy",   NZD_OIS,     0.0,  6 },
+        /* Year-tenor NZONIA swaps (long end of OIS curve) */
+        { "NDSO3 Curncy",    NZD_OIS,     3.0,  0 },
+        { "NDSO4 Curncy",    NZD_OIS,     4.0,  0 },
+        { "NDSO5 Curncy",    NZD_OIS,     5.0,  0 },
+        { "NDSO6 Curncy",    NZD_OIS,     6.0,  0 },
+        { "NDSO7 Curncy",    NZD_OIS,     7.0,  0 },
+        { "NDSO10 Curncy",   NZD_OIS,     10.0, 0 },
+        { "NDSO12 Curncy",   NZD_OIS,     12.0, 0 },
+        { "NDSO15 Curncy",   NZD_OIS,     15.0, 0 },
+        /* BKBM forward curve */
+        { "NDBB3M Curncy",   NZD_DEPOSIT, 0.25, 0 },
+        { "ZB1 Comdty",      NZD_FUTURE,  0.0,  0 },
+        { "ZB2 Comdty",      NZD_FUTURE,  0.0,  0 },
+        { "ZB3 Comdty",      NZD_FUTURE,  0.0,  0 },
+        { "ZB4 Comdty",      NZD_FUTURE,  0.0,  0 },
+        { "NDSWAP3 Curncy",  NZD_SWAP,    3.0,  0 },
+        { "NDSWAP4 Curncy",  NZD_SWAP,    4.0,  0 },
+        { "NDSWAP5 Curncy",  NZD_SWAP,    5.0,  0 },
+        { "NDSWAP6 Curncy",  NZD_SWAP,    6.0,  0 },
+        { "NDSWAP7 Curncy",  NZD_SWAP,    7.0,  0 },
+        { "NDSWAP10 Curncy", NZD_SWAP,    10.0, 0 },
+        { "NDSWAP12 Curncy", NZD_SWAP,    12.0, 0 },
+        { "NDSWAP15 Curncy", NZD_SWAP,    15.0, 0 },
     };
     static constexpr int NSPECS =
         static_cast<int>(sizeof(SPECS) / sizeof(SPECS[0]));
@@ -1190,15 +1202,22 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
         case NZD_OIS:
         {
             if (!pr.rate_ok) continue;
-            /* Maturity from Bloomberg MATURITY field; fallback to tenor_y */
+            /*
+             * Maturity from Bloomberg MATURITY field.
+             * Fallback for NDSF (meeting-dated): meeting_n / 7 years.
+             * Fallback for NDSO (year-tenor):    tenor_y.
+             */
             double maturity_yf = 0.0;
             if (pr.mat_ok) {
                 const DateTime mat = parse_blp_date_string(pr.mat_str);
                 if (mat.year > 0)
                     maturity_yf = calculateYearFraction(as_of, mat);
             }
-            if (maturity_yf <= 0.0)
-                maturity_yf = spec.tenor_y;
+            if (maturity_yf <= 0.0) {
+                maturity_yf = (spec.tenor_y > 0.0)
+                    ? spec.tenor_y
+                    : static_cast<double>(spec.meeting_n) / 7.0;
+            }
 
             inst.type             = OIS_SWAP;
             inst.startTime        = 0.0;

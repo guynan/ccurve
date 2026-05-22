@@ -232,7 +232,8 @@ int blp_fetch_curve_instruments(BlpSession       *s,
  *   DEPOSIT / FUTURE / SWAP → BKBM forward curve  (bootstrapCurve vs OIS)
  *
  * Instrument universe (19 instruments, OIS first then BKBM in order):
- *   OIS   : NDSO{1..6} Curncy        (MID, MATURITY) — 1Y–6Y NZONIA OIS swaps
+ *   OIS   : NDSF{1..6}A Curncy        (MID, MATURITY) — meeting-dated NZONIA
+ *           NDSO{3,4,5,6,7,10,12,15} (MID, MATURITY) — year-tenor NZONIA swaps
  *   Depo  : NDBB3M Curncy            (MID)           — 3M BKBM bank bill
  *   Fut   : ZB1–ZB4 Comdty           (PX_LAST, LAST_TRADEABLE_DT)
  *   Swap  : NDSWAP{3,4,5,6,7,10,12,15} Curncy (MID)  — quarterly BKBM IRS
@@ -244,7 +245,7 @@ int blp_fetch_curve_instruments(BlpSession       *s,
  *
  * @param s               Connected BlpSession.
  * @param out             Caller-supplied MarketInstrument array.
- * @param max_instruments Capacity of out[]; must be >= 19 for the full set.
+ * @param max_instruments Capacity of out[]; must be >= 27 for the full set.
  * @param as_of_date      Curve date in "YYYY-MM-DD" format.
  * @return                Number of instruments written into out[],
  *                        or -1 if the session is not connected.
