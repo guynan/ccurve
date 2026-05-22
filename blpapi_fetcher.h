@@ -232,7 +232,7 @@ int blp_fetch_curve_instruments(BlpSession       *s,
  *   DEPOSIT / FUTURE / SWAP → BKBM forward curve  (bootstrapCurve vs OIS)
  *
  * Instrument universe (19 instruments, OIS first then BKBM in order):
- *   OIS   : NDSF{1..6}A Curncy      (MID, MATURITY) — meeting-dated NZONIA
+ *   OIS   : NDSO{1..6} Curncy        (MID, MATURITY) — 1Y–6Y NZONIA OIS swaps
  *   Depo  : NDBB3M Curncy            (MID)           — 3M BKBM bank bill
  *   Fut   : ZB1–ZB4 Comdty           (PX_LAST, LAST_TRADEABLE_DT)
  *   Swap  : NDSWAP{3,4,5,6,7,10,12,15} Curncy (MID)  — quarterly BKBM IRS

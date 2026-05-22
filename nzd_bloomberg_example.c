@@ -6,7 +6,7 @@
  * Two independent curve legs fetched in a single BDP call:
  *
  *   NZONIA OIS (discount curve)
- *     NDSF{1..6}A Curncy  — meeting-dated NZONIA OIS swaps
+ *     NDSO{1..6} Curncy   — 1Y-6Y NZONIA OIS swaps
  *
  *   BKBM forward curve (projection curve)
  *     NDBB3M Curncy       — 3M BKBM bank bill deposit
@@ -60,7 +60,7 @@ int main(int argc, char **argv)
 
     printf("================================================================\n");
     printf("  NZD Dual-Curve Bootstrap  --  Bloomberg Data Feed\n");
-    printf("  OIS: NZONIA (NDSF meeting swaps)\n");
+    printf("  OIS: NZONIA (NDSO1-6 year-tenor swaps)\n");
     printf("  FWD: BKBM   (NDBB3M + ZB futures + NDSWAP IRS)\n");
     printf("================================================================\n");
     printf("  Anchor date : %s\n", as_of_date);
