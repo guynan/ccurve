@@ -219,6 +219,41 @@ int blp_fetch_curve_instruments(BlpSession       *s,
                                 int               max_instruments,
                                 const char       *as_of_date);
 
+/* ======================================================================== */
+/*  Convenience: NZD BKBM curve instrument fetch                             */
+/* ======================================================================== */
+
+/**
+ * Fetch a complete NZD BKBM curve instrument set from Bloomberg in a single
+ * BDP request and populate a MarketInstrument array ready for use with
+ * bootstrapOisCurve() (single-curve, self-discounted) or bootstrapCurve()
+ * with a separate OIS discount curve.
+ *
+ * Instrument universe (14 instruments, in bootstrap order):
+ *   Deposit : NDBB3M Curncy            (MID)              — 3M BKBM bank bill
+ *   Futures : ZB1–ZB4 Comdty           (PX_LAST, LAST_TRADEABLE_DT)
+ *   Swaps   : NDSWAP{2,3,4,5,6,7,10,12,15} Curncy (MID)  — quarterly BKBM IRS
+ *
+ * NZD market conventions applied:
+ *   Deposit : fixedDcf=DCF_ACT_365, bda=BDA_MODIFIED_FOLLOWING, cal="NZD"
+ *   Futures : startTime = maturity - 0.25 (90-day bank bill),
+ *             fixedDcf=DCF_ACT_365, bda=BDA_MODIFIED_FOLLOWING, cal="NZD"
+ *   Swaps   : paymentFrequency=4 (quarterly both legs, BKBM float),
+ *             fixedDcf=DCF_ACT_365, floatDcf=DCF_ACT_365,
+ *             bda=BDA_MODIFIED_FOLLOWING, cal="NZD"
+ *
+ * @param s               Connected BlpSession.
+ * @param out             Caller-supplied MarketInstrument array.
+ * @param max_instruments Capacity of out[]; must be >= 14 for the full set.
+ * @param as_of_date      Curve date in "YYYY-MM-DD" format.
+ * @return                Number of instruments written into out[],
+ *                        or -1 if the session is not connected.
+ */
+int blp_fetch_nzd_curve_instruments(BlpSession       *s,
+                                     MarketInstrument *out,
+                                     int               max_instruments,
+                                     const char       *as_of_date);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

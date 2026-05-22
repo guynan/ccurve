@@ -2,7 +2,7 @@
 CC ?= gcc
 CFLAGS = -Wall -Wextra --std=c99
 DEBUG_FLAGS = -Wstrict-prototypes -Wpointer-arith -Wshadow \
-			 -pg -g 
+			 -pg -g
 LFLAGS = -lm
 #$(CC) $(CFLAGS) $(DEBUG_FLAGS) dual_curve.c $(LFLAGS)
 
@@ -23,4 +23,13 @@ bloomberg:
 	  blpapi_fetcher.cpp blpapi_data_mapper.cpp dual_curve.c interp.c date_utils.c \
 	  -lblpapi3 -lm
 
-        
+# Build the NZD Bloomberg example executable.
+# Requires:  make bloomberg  (builds libbloomberg_fetcher.so first)
+#            BLPAPI_HOME set to the Bloomberg C++ SDK root
+# Run:       LD_LIBRARY_PATH=. ./nzd_example [YYYY-MM-DD] [host] [port]
+nzd_example: all bloomberg
+	$(CC) -std=c99 -O2 -Wall \
+	  -o nzd_example nzd_bloomberg_example.c \
+	  -L. -lcurve_engine -lbloomberg_fetcher -lm \
+	  -Wl,-rpath,'$$ORIGIN'
+
