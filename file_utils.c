@@ -128,68 +128,98 @@ int32_t loadInstrumentsFromDatesJSON(const char *filename, const char* anchorDat
 		// 4. Market Instruments Array Parser
 		// ==========================================
 		else if (readingMarket) {
-			char *typeKey = strstr(line, "\"type\"");
-			char *startKey = strstr(line, "\"startDate\"");
-			char *matKey = strstr(line, "\"maturityDate\"");
-			char *rateKey = strstr(line, "\"rate\"");
-			char *priceKey = strstr(line, "\"price\"");
-			char *freqKey = strstr(line, "\"paymentFrequency\"");
+			char *typeKey     = strstr(line, "\"type\"");
+			char *startKey    = strstr(line, "\"startDate\"");
+			char *matKey      = strstr(line, "\"maturityDate\"");
+			char *rateKey     = strstr(line, "\"rate\"");
+			char *priceKey    = strstr(line, "\"price\"");
+			char *freqKey     = strstr(line, "\"paymentFrequency\"");
+			char *fixedDcfKey = strstr(line, "\"fixedDcf\"");
+			char *floatDcfKey = strstr(line, "\"floatDcf\"");
+			char *bdaKey      = strstr(line, "\"bda\"");
+			char *calKey      = strstr(line, "\"calendar\"");
 
-			// Incremental key extractions (handles both spaced and dense JSON variants)
-			if (typeKey)  { 
-				if (sscanf(typeKey, "\"type\" : \"%15[^\"]\"", typeStr) != 1) {
+			if (typeKey)  {
+				if (sscanf(typeKey, "\"type\" : \"%15[^\"]\"", typeStr) != 1)
 					sscanf(typeKey, "\"type\":\"%15[^\"]\"", typeStr);
-				}
 			}
-			if (startKey) { 
-				if (sscanf(startKey, "\"startDate\" : \"%10[^\"]\"", startExStr) != 1) {
+			if (startKey) {
+				if (sscanf(startKey, "\"startDate\" : \"%10[^\"]\"", startExStr) != 1)
 					sscanf(startKey, "\"startDate\":\"%10[^\"]\"", startExStr);
-				}
 			}
-			if (matKey)   { 
-				if (sscanf(matKey, "\"maturityDate\" : \"%10[^\"]\"", matExStr) != 1) {
+			if (matKey) {
+				if (sscanf(matKey, "\"maturityDate\" : \"%10[^\"]\"", matExStr) != 1)
 					sscanf(matKey, "\"maturityDate\":\"%10[^\"]\"", matExStr);
-				}
 			}
-			
-			if (rateKey)  { char *colon = strchr(rateKey, ':'); if (colon) rate = strtod(colon + 1, NULL); }
-			if (priceKey) { char *colon = strchr(priceKey, ':'); if (colon) price = strtod(colon + 1, NULL); }
-			if (freqKey)  { char *colon = strchr(freqKey, ':'); if (colon) frequency = (int)strtol(colon + 1, NULL, 10); }
+			if (rateKey)     { char *c = strchr(rateKey,  ':'); if (c) rate      = strtod(c + 1, NULL); }
+			if (priceKey)    { char *c = strchr(priceKey, ':'); if (c) price     = strtod(c + 1, NULL); }
+			if (freqKey)     { char *c = strchr(freqKey,  ':'); if (c) frequency = (int)strtol(c + 1, NULL, 10); }
 
-			// Evaluate, parse, and append data structures safely at block boundary
+			/* Optional convention fields */
+			char dcfStr[32] = "", bdaStr[32] = "", calStr[32] = "";
+			if (fixedDcfKey) {
+				if (sscanf(fixedDcfKey, "\"fixedDcf\" : \"%31[^\"]\"", dcfStr) != 1)
+					sscanf(fixedDcfKey, "\"fixedDcf\":\"%31[^\"]\"", dcfStr);
+			}
+			if (floatDcfKey) {
+				char fdc[32] = "";
+				if (sscanf(floatDcfKey, "\"floatDcf\" : \"%31[^\"]\"", fdc) != 1)
+					sscanf(floatDcfKey, "\"floatDcf\":\"%31[^\"]\"", fdc);
+				/* stored below per instrument */
+				strncpy(dcfStr, fdc, sizeof(dcfStr) - 1);
+				dcfStr[sizeof(dcfStr) - 1] = '\0';
+			}
+			if (bdaKey) {
+				if (sscanf(bdaKey, "\"bda\" : \"%31[^\"]\"", bdaStr) != 1)
+					sscanf(bdaKey, "\"bda\":\"%31[^\"]\"", bdaStr);
+			}
+			if (calKey) {
+				if (sscanf(calKey, "\"calendar\" : \"%31[^\"]\"", calStr) != 1)
+					sscanf(calKey, "\"calendar\":\"%31[^\"]\"", calStr);
+			}
+
 			if (strstr(line, "}") && strlen(typeStr) > 0 && strlen(matExStr) > 0) {
-				
 				int32_t validInstrument = 0;
-				if (strcmp(typeStr, "DEPOSIT") == 0) {
-					instruments[instCount].type = DEPOSIT;
-					validInstrument = 1;
-				} else if (strcmp(typeStr, "FUTURE") == 0) {
-					instruments[instCount].type = FUTURE;
-					validInstrument = 1;
-				} else if (strcmp(typeStr, "SWAP") == 0) {
-					instruments[instCount].type = SWAP;
-					validInstrument = 1;
-				}
+				if      (strcmp(typeStr, "DEPOSIT")  == 0) { instruments[instCount].type = DEPOSIT;  validInstrument = 1; }
+				else if (strcmp(typeStr, "FUTURE")   == 0) { instruments[instCount].type = FUTURE;   validInstrument = 1; }
+				else if (strcmp(typeStr, "SWAP")     == 0) { instruments[instCount].type = SWAP;     validInstrument = 1; }
+				else if (strcmp(typeStr, "OIS_SWAP") == 0) { instruments[instCount].type = OIS_SWAP; validInstrument = 1; }
 
 				if (validInstrument && instCount < maxInstruments) {
 					DateTime startEvent = parseDateString(startExStr);
-					DateTime matEvent = parseDateString(matExStr);
+					DateTime matEvent   = parseDateString(matExStr);
 
-					instruments[instCount].startTime = calculateYearFraction(anchorDate, startEvent);
-					instruments[instCount].maturity = calculateYearFraction(anchorDate, matEvent);
-					instruments[instCount].rate = rate;
-					instruments[instCount].price = price;
+					instruments[instCount].startTime        = calculateYearFraction(anchorDate, startEvent);
+					instruments[instCount].maturity         = calculateYearFraction(anchorDate, matEvent);
+					instruments[instCount].rate             = rate;
+					instruments[instCount].price            = price;
 					instruments[instCount].paymentFrequency = frequency;
+
+					/* Map DCF string to enum (default: Act/365) */
+					DayCountFraction dcf = DCF_ACT_365;
+					if      (strcmp(dcfStr, "ACT_360")      == 0) dcf = DCF_ACT_360;
+					else if (strcmp(dcfStr, "30_360")       == 0) dcf = DCF_30_360;
+					else if (strcmp(dcfStr, "ACT_ACT_ISDA") == 0) dcf = DCF_ACT_ACT_ISDA;
+					else if (strcmp(dcfStr, "BUS_252")      == 0) dcf = DCF_BUS_252;
+					instruments[instCount].fixedDcf = dcf;
+					instruments[instCount].floatDcf = dcf;
+
+					/* Map BDA string to enum (default: none) */
+					BusinessDayAdjustment bda = BDA_NONE;
+					if      (strcmp(bdaStr, "FOLLOWING")          == 0) bda = BDA_FOLLOWING;
+					else if (strcmp(bdaStr, "MODIFIED_FOLLOWING") == 0) bda = BDA_MODIFIED_FOLLOWING;
+					else if (strcmp(bdaStr, "PRECEDING")          == 0) bda = BDA_PRECEDING;
+					instruments[instCount].bda = bda;
+
+					strncpy(instruments[instCount].calendarName, calStr,
+					        sizeof(instruments[instCount].calendarName) - 1);
+					instruments[instCount].calendarName[sizeof(instruments[instCount].calendarName) - 1] = '\0';
+
 					instCount++;
 				}
 
-				// Clean buffers immediately so upcoming elements start from blank sheets
-				typeStr[0] = '\0';
-				startExStr[0] = '\0';
-				matExStr[0] = '\0';
-				rate = -1.0;
-				price = -1.0;
-				frequency = -1;
+				typeStr[0] = '\0'; startExStr[0] = '\0'; matExStr[0] = '\0';
+				rate = -1.0; price = -1.0; frequency = -1;
 			}
 		}
 	}

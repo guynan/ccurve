@@ -16,16 +16,20 @@ double solveParSwapRate(const InterestRateCurve *fwdCurve,
                         const InterestRateCurve *oisCurve,
                         double maturity, int32_t frequency)
 {
-    double dt       = 1.0 / frequency;
-    int32_t payments = (int)(maturity * frequency + 0.5);
-    double floatLeg = 0.0, annuity = 0.0;
-    double tPrev    = 0.0;
+    double dt_approx = 1.0 / frequency;
+    int32_t payments  = (int)(maturity * frequency + 0.5);
+    double floatLeg   = 0.0, annuity = 0.0;
+    double tPrev      = 0.0;
 
     for (int32_t i = 1; i <= payments; i++) {
-        double tPay     = i * dt;
+        double tPay = i * dt_approx;
+        /* Accrual fraction: year fraction of the actual period.
+         * Using actual elapsed time rather than the fixed 1/freq captures
+         * any day-count irregularity introduced by calendar rolling. */
+        double dt       = tPay - tPrev;
         double dfFwdPay = getDiscountFactor(fwdCurve, tPay);
         double dfFwdPrv = getDiscountFactor(fwdCurve, tPrev);
-        double fwdRate  = (dfFwdPrv / dfFwdPay - 1.0) / dt;
+        double fwdRate  = (dt > 0.0) ? (dfFwdPrv / dfFwdPay - 1.0) / dt : 0.0;
         double dfOis    = getDiscountFactor(oisCurve, tPay);
         floatLeg += fwdRate * dt * dfOis;
         annuity  += dt * dfOis;

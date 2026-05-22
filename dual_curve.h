@@ -2,6 +2,7 @@
 #define DUAL_CURVE_PRIMARY_H
 
 #include <stdint.h>
+#include "date_utils.h"
 
 #ifndef MAX_NODES
 #define MAX_NODES 50
@@ -43,12 +44,16 @@ typedef enum {
 } InstrumentType;
 
 typedef struct {
-    InstrumentType type;
-    double         startTime;
-    double         maturity;
-    double         rate;
-    double         price;
-    int32_t        paymentFrequency;
+    InstrumentType      type;
+    double              startTime;
+    double              maturity;
+    double              rate;
+    double              price;
+    int32_t             paymentFrequency;
+    DayCountFraction    fixedDcf;       /* day count for fixed leg  (0 = Act/365) */
+    DayCountFraction    floatDcf;       /* day count for float leg  (0 = Act/365) */
+    BusinessDayAdjustment bda;          /* business day convention  (0 = none)    */
+    char                calendarName[32]; /* e.g. "USD" — loaded at parse time   */
 } MarketInstrument;
 
 typedef struct InterestRateCurve {
