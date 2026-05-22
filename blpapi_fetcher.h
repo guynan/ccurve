@@ -224,30 +224,27 @@ int blp_fetch_curve_instruments(BlpSession       *s,
 /* ======================================================================== */
 
 /**
- * Fetch a complete NZD dual-curve instrument set from Bloomberg and populate
- * a MarketInstrument array for use with bootstrapOisCurve() (OIS leg) and
- * bootstrapCurve() (BKBM forward leg discounted by NZONIA OIS).
+ * Fetch the full NZD dual-curve instrument set from Bloomberg in a single
+ * BDP request.  Returns instruments tagged by type so the caller can split
+ * them into the two independent bootstrap inputs:
  *
- * NZD has a liquid NZONIA OIS market, so proper dual-curve construction is
- * used: the OIS curve is bootstrapped from meeting-dated NZONIA swaps and
- * the BKBM forward curve is bootstrapped from BKBM IRS discounted off OIS.
+ *   OIS_SWAP  → NZONIA OIS discount curve  (bootstrapOisCurve)
+ *   DEPOSIT / FUTURE / SWAP → BKBM forward curve  (bootstrapCurve vs OIS)
  *
- * Instrument universe (14 instruments, in bootstrap order):
- *   OIS swaps : NDSF{1..6}A Curncy (MID, MATURITY) — meeting-dated NZONIA
- *   BKBM IRS  : NDSWAP{3,4,5,6,7,10,12,15} Curncy (MID) — quarterly BKBM
+ * Instrument universe (19 instruments, OIS first then BKBM in order):
+ *   OIS   : NDSF{1..6}A Curncy      (MID, MATURITY) — meeting-dated NZONIA
+ *   Depo  : NDBB3M Curncy            (MID)           — 3M BKBM bank bill
+ *   Fut   : ZB1–ZB4 Comdty           (PX_LAST, LAST_TRADEABLE_DT)
+ *   Swap  : NDSWAP{3,4,5,6,7,10,12,15} Curncy (MID)  — quarterly BKBM IRS
  *
- * Instruments are tagged by type so the caller can split them:
- *   OIS_SWAP  → bootstrap the NZONIA discount curve
- *   SWAP      → bootstrap the BKBM forward curve (discount = NZONIA)
- *
- * NZD market conventions applied (both curve legs):
+ * NZD market conventions applied to all instruments:
  *   fixedDcf=DCF_ACT_365, floatDcf=DCF_ACT_365,
  *   bda=BDA_MODIFIED_FOLLOWING, cal="NZD"
- *   BKBM IRS paymentFrequency=4 (quarterly)
+ *   BKBM IRS / futures paymentFrequency=4 (quarterly)
  *
  * @param s               Connected BlpSession.
  * @param out             Caller-supplied MarketInstrument array.
- * @param max_instruments Capacity of out[]; must be >= 14 for the full set.
+ * @param max_instruments Capacity of out[]; must be >= 19 for the full set.
  * @param as_of_date      Curve date in "YYYY-MM-DD" format.
  * @return                Number of instruments written into out[],
  *                        or -1 if the session is not connected.

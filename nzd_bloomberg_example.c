@@ -1,24 +1,27 @@
 /*
  * nzd_bloomberg_example.c
  *
- * Demonstrates dual-curve bootstrapping for NZD using live Bloomberg data.
+ * NZD dual-curve bootstrap via Bloomberg.
  *
- * NZD has a liquid NZONIA OIS market, so the standard approach is:
- *   1. Bootstrap the NZONIA OIS discount curve from meeting-dated OIS swaps.
- *   2. Bootstrap the BKBM forward curve from quarterly IRS discounted off OIS.
+ * Two independent curve legs fetched in a single BDP call:
  *
- * Instruments used:
- *   NDSF{1..6}A Curncy  — meeting-dated NZONIA OIS swaps  (OIS curve)
- *   NDSWAP{3,4,5,6,7,10,12,15} Curncy — quarterly BKBM IRS (IBOR curve)
+ *   NZONIA OIS (discount curve)
+ *     NDSF{1..6}A Curncy  — meeting-dated NZONIA OIS swaps
  *
- * Build (requires Bloomberg C++ SDK at BLPAPI_HOME and built shared libs):
- *   make bloomberg
- *   make nzd_example
+ *   BKBM forward curve (projection curve)
+ *     NDBB3M Curncy       — 3M BKBM bank bill deposit
+ *     ZB1–ZB4 Comdty      — ASX 90-day bank bill futures
+ *     NDSWAP{3,4,5,6,7,10,12,15} Curncy — quarterly BKBM IRS
+ *
+ * The two curves are built independently and then combined:
+ *   bootstrapOisCurve   → NZONIA OIS (self-discounted)
+ *   bootstrapCurve      → BKBM forward, discounted by NZONIA OIS
+ *
+ * Build:
+ *   make bloomberg && make nzd_example
  *
  * Run:
  *   ./nzd_example [YYYY-MM-DD] [blp-host] [blp-port]
- *
- *   Defaults: today's date, localhost, 8194.
  */
 
 #include <stdio.h>
@@ -28,10 +31,6 @@
 
 #include "dual_curve.h"
 #include "blpapi_fetcher.h"
-
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                             */
-/* ------------------------------------------------------------------ */
 
 static const char *inst_type_name(InstrumentType t)
 {
@@ -44,14 +43,10 @@ static const char *inst_type_name(InstrumentType t)
     }
 }
 
-static void print_separator(void)
+static void sep(void)
 {
     printf("  %s\n", "------------------------------------------------------------");
 }
-
-/* ------------------------------------------------------------------ */
-/*  main                                                               */
-/* ------------------------------------------------------------------ */
 
 int main(int argc, char **argv)
 {
@@ -65,128 +60,117 @@ int main(int argc, char **argv)
 
     printf("================================================================\n");
     printf("  NZD Dual-Curve Bootstrap  --  Bloomberg Data Feed\n");
-    printf("  NZONIA OIS + BKBM Forward Curve\n");
+    printf("  OIS: NZONIA (NDSF meeting swaps)\n");
+    printf("  FWD: BKBM   (NDBB3M + ZB futures + NDSWAP IRS)\n");
     printf("================================================================\n");
     printf("  Anchor date : %s\n", as_of_date);
     printf("  Bloomberg   : %s:%d\n\n", blp_host, blp_port);
 
     /* ----------------------------------------------------------------
-     * 1. Connect to Bloomberg
+     * 1. Connect
      * ---------------------------------------------------------------- */
     BlpSession *session = blp_session_create(blp_host, blp_port);
     if (!blp_session_connected(session)) {
         fprintf(stderr,
-            "Error: cannot connect to Bloomberg at %s:%d.\n"
-            "       Ensure the Bloomberg API server / B-PIPE is running.\n",
-            blp_host, blp_port);
+            "Error: cannot connect to Bloomberg at %s:%d.\n", blp_host, blp_port);
         blp_session_destroy(session);
         return 1;
     }
-    printf("  Bloomberg session: connected\n\n");
 
     /* ----------------------------------------------------------------
-     * 2. Fetch all NZD market instruments (OIS + BKBM in one BDP call)
+     * 2. Fetch all 19 instruments in one BDP call
      * ---------------------------------------------------------------- */
-    MarketInstrument all_instruments[MAX_NODES];
-    memset(all_instruments, 0, sizeof(all_instruments));
+    MarketInstrument all_inst[MAX_NODES];
+    memset(all_inst, 0, sizeof(all_inst));
 
     int n_all = blp_fetch_nzd_curve_instruments(
-                    session, all_instruments, MAX_NODES, as_of_date);
-
+                    session, all_inst, MAX_NODES, as_of_date);
     blp_session_destroy(session);
 
     if (n_all <= 0) {
-        fprintf(stderr,
-            "Error: blp_fetch_nzd_curve_instruments returned %d.\n"
-            "       Check that all NZD tickers are available on your terminal.\n",
-            n_all);
+        fprintf(stderr, "Error: fetch returned %d instruments.\n", n_all);
         return 1;
     }
 
-    /* Separate into OIS (NZONIA) and IBOR (BKBM) arrays */
-    MarketInstrument ois_instruments[MAX_NODES];
-    MarketInstrument ibor_instruments[MAX_NODES];
-    int n_ois = 0, n_ibor = 0;
+    /* Split: OIS_SWAP → ois_inst[], everything else → bkbm_inst[] */
+    MarketInstrument ois_inst[MAX_NODES];
+    MarketInstrument bkbm_inst[MAX_NODES];
+    int n_ois = 0, n_bkbm = 0;
 
     for (int i = 0; i < n_all; i++) {
-        if (all_instruments[i].type == OIS_SWAP)
-            ois_instruments[n_ois++] = all_instruments[i];
-        else if (all_instruments[i].type == SWAP)
-            ibor_instruments[n_ibor++] = all_instruments[i];
+        if (all_inst[i].type == OIS_SWAP)
+            ois_inst[n_ois++]   = all_inst[i];
+        else
+            bkbm_inst[n_bkbm++] = all_inst[i];
     }
 
-    printf("  Fetched %d instruments (%d OIS, %d BKBM IRS):\n\n",
-           n_all, n_ois, n_ibor);
-    printf("  %-4s  %-8s  %-8s  %-10s\n", "Idx", "Type", "Mat (Y)", "Rate");
-    print_separator();
+    printf("  Fetched %d instruments  (%d OIS, %d BKBM):\n\n",
+           n_all, n_ois, n_bkbm);
+    printf("  %-4s  %-8s  %-8s  %-10s\n", "Idx", "Type", "Mat (Y)", "Rate / Price");
+    sep();
     for (int i = 0; i < n_all; i++) {
-        const MarketInstrument *inst = &all_instruments[i];
-        printf("  [%2d]  %-7s  %6.3f   %8.4f%%\n",
-               i, inst_type_name(inst->type),
-               inst->maturity, inst->rate * 100.0);
+        const MarketInstrument *ins = &all_inst[i];
+        if (ins->type == FUTURE)
+            printf("  [%2d]  %-7s  %6.3f   price=%.4f\n",
+                   i, inst_type_name(ins->type), ins->maturity, ins->price);
+        else
+            printf("  [%2d]  %-7s  %6.3f   rate=%.4f%%\n",
+                   i, inst_type_name(ins->type), ins->maturity, ins->rate * 100.0);
     }
     printf("\n");
 
     /* ----------------------------------------------------------------
-     * 3. Bootstrap NZONIA OIS discount curve
-     *    (self-discounted: uses oisCurve as its own discount curve)
+     * 3. Bootstrap NZONIA OIS discount curve  (self-discounted)
      * ---------------------------------------------------------------- */
     InterestRateCurve oisCurve;
     memset(&oisCurve, 0, sizeof(oisCurve));
 
-    printf("  Bootstrapping NZONIA OIS curve (%d instruments) ...\n", n_ois);
-    int rc = bootstrapOisCurve(&oisCurve, ois_instruments, n_ois, NULL);
-    if (rc != 0) {
-        fprintf(stderr, "Error: bootstrapOisCurve failed (rc=%d).\n", rc);
+    printf("  Bootstrapping NZONIA OIS curve (%d meeting swaps) ...\n", n_ois);
+    if (bootstrapOisCurve(&oisCurve, ois_inst, n_ois, NULL) != 0) {
+        fprintf(stderr, "Error: bootstrapOisCurve failed.\n");
         return 1;
     }
-    printf("  Done. %d OIS nodes calibrated.\n\n", oisCurve.numNodes);
+    printf("  Done. %d nodes.\n\n", oisCurve.numNodes);
 
     /* ----------------------------------------------------------------
-     * 4. Bootstrap BKBM forward curve (discounted off OIS)
+     * 4. Bootstrap BKBM forward curve  (discounted by OIS)
      * ---------------------------------------------------------------- */
     InterestRateCurve bkbmCurve;
     memset(&bkbmCurve, 0, sizeof(bkbmCurve));
 
-    printf("  Bootstrapping BKBM forward curve (%d instruments) ...\n", n_ibor);
-    int rc2 = bootstrapCurve(&bkbmCurve, &oisCurve,
-                              ibor_instruments, n_ibor, NULL);
-    if (rc2 != 0) {
-        fprintf(stderr, "Error: bootstrapCurve (BKBM) failed (rc=%d).\n", rc2);
+    printf("  Bootstrapping BKBM forward curve (%d instruments) ...\n", n_bkbm);
+    if (bootstrapCurve(&bkbmCurve, &oisCurve, bkbm_inst, n_bkbm, NULL) != 0) {
+        fprintf(stderr, "Error: bootstrapCurve (BKBM) failed.\n");
         return 1;
     }
-    printf("  Done. %d BKBM forward nodes calibrated.\n\n", bkbmCurve.numNodes);
+    printf("  Done. %d nodes.\n\n", bkbmCurve.numNodes);
 
     /* ----------------------------------------------------------------
      * 5. NZONIA OIS zero curve
      * ---------------------------------------------------------------- */
     printf("  NZONIA OIS Zero Curve (continuous, Act/365)\n");
-    print_separator();
+    sep();
     printf("  %-4s  %-8s  %-12s  %-12s\n",
            "Idx", "Mat (Y)", "Zero Rate %", "Disc Factor");
-    print_separator();
-    for (int i = 0; i < oisCurve.numNodes; i++) {
+    sep();
+    for (int i = 0; i < oisCurve.numNodes; i++)
         printf("  [%2d]  %6.3f   %10.4f%%   %.8f\n",
                i, oisCurve.times[i],
-               oisCurve.rates[i] * 100.0,
-               oisCurve.dfs[i]);
-    }
+               oisCurve.rates[i] * 100.0, oisCurve.dfs[i]);
     printf("\n");
 
     /* ----------------------------------------------------------------
      * 6. BKBM forward zero curve
      * ---------------------------------------------------------------- */
     printf("  BKBM Forward Zero Curve (continuous, Act/365)\n");
-    print_separator();
+    sep();
     printf("  %-4s  %-8s  %-12s  %-12s\n",
            "Idx", "Mat (Y)", "Zero Rate %", "Disc Factor");
-    print_separator();
-    for (int i = 0; i < bkbmCurve.numNodes; i++) {
+    sep();
+    for (int i = 0; i < bkbmCurve.numNodes; i++)
         printf("  [%2d]  %6.3f   %10.4f%%   %.8f\n",
                i, bkbmCurve.times[i],
-               bkbmCurve.rates[i] * 100.0,
-               bkbmCurve.dfs[i]);
-    }
+               bkbmCurve.rates[i] * 100.0, bkbmCurve.dfs[i]);
     printf("\n");
 
     /* ----------------------------------------------------------------
@@ -197,36 +181,33 @@ int main(int argc, char **argv)
     computeBasisCurve(&bkbmCurve, &oisCurve, &basis);
 
     printf("  OIS-BKBM Basis Spread (BKBM zero minus NZONIA zero)\n");
-    print_separator();
+    sep();
     printf("  %-8s  %-12s\n", "Mat (Y)", "Spread (bps)");
-    print_separator();
-    for (int i = 0; i < basis.numNodes; i++) {
-        printf("  %6.3f   %+10.4f\n",
-               basis.times[i], basis.spreadsBps[i]);
-    }
+    sep();
+    for (int i = 0; i < basis.numNodes; i++)
+        printf("  %6.3f   %+10.4f\n", basis.times[i], basis.spreadsBps[i]);
     printf("\n");
 
     /* ----------------------------------------------------------------
-     * 8. Par BKBM swap rate verification
-     *    Calibrated par rates should reproduce market quotes to < 0.01 bp
+     * 8. Par BKBM swap rate verification  (residuals should be < 0.01 bp)
      * ---------------------------------------------------------------- */
     static const double SWAP_TENORS[] = { 3.0, 4.0, 5.0, 6.0,
                                            7.0, 10.0, 12.0, 15.0 };
     int nTenors = (int)(sizeof(SWAP_TENORS) / sizeof(SWAP_TENORS[0]));
 
     printf("  Par BKBM Swap Rate Verification (quarterly, Act/365)\n");
-    print_separator();
+    sep();
     printf("  %-8s  %-12s  %-12s  %-10s\n",
            "Tenor", "Par Rate %", "Market %", "Error (bp)");
-    print_separator();
+    sep();
     for (int ti = 0; ti < nTenors; ti++) {
         double par = solveParSwapRate(&bkbmCurve, &oisCurve,
-                                      SWAP_TENORS[ti], 4 /* quarterly */);
+                                      SWAP_TENORS[ti], 4);
         double mkt = 0.0;
-        for (int j = 0; j < n_ibor; j++) {
-            if (ibor_instruments[j].type == SWAP &&
-                fabs(ibor_instruments[j].maturity - SWAP_TENORS[ti]) < 0.01) {
-                mkt = ibor_instruments[j].rate;
+        for (int j = 0; j < n_bkbm; j++) {
+            if (bkbm_inst[j].type == SWAP &&
+                fabs(bkbm_inst[j].maturity - SWAP_TENORS[ti]) < 0.01) {
+                mkt = bkbm_inst[j].rate;
                 break;
             }
         }
@@ -240,51 +221,44 @@ int main(int argc, char **argv)
      * 9. Implied BKBM forward rates
      * ---------------------------------------------------------------- */
     printf("  Implied BKBM Forward Rates\n");
-    print_separator();
-    printf("  %-12s  %-12s  %-12s\n",
-           "Period start", "Period end", "Fwd rate %");
-    print_separator();
+    sep();
+    printf("  %-12s  %-12s  %-12s\n", "Start", "End", "Fwd rate %");
+    sep();
 
     static const struct { double s; double e; } FWD_PAIRS[] = {
-        { 0.00,  0.25  },
-        { 0.25,  0.50  },
-        { 0.50,  1.00  },
-        { 1.00,  2.00  },
-        { 2.00,  3.00  },
-        { 3.00,  5.00  },
-        { 5.00,  7.00  },
-        { 7.00,  10.00 },
-        { 10.00, 15.00 },
+        { 0.00, 0.25 }, { 0.25, 0.50 }, { 0.50, 0.75 },
+        { 0.75, 1.00 }, { 1.00, 1.25 }, { 1.25, 2.00 },
+        { 2.00, 3.00 }, { 3.00, 5.00 }, { 5.00, 7.00 },
+        { 7.00, 10.00 }, { 10.00, 15.00 },
     };
     int nFwd = (int)(sizeof(FWD_PAIRS) / sizeof(FWD_PAIRS[0]));
-
     for (int i = 0; i < nFwd; i++) {
-        double fwd = getForwardRate(&bkbmCurve,
-                                    FWD_PAIRS[i].s, FWD_PAIRS[i].e);
+        double fwd = getForwardRate(&bkbmCurve, FWD_PAIRS[i].s, FWD_PAIRS[i].e);
         printf("  %7.2fY      %7.2fY      %10.4f%%\n",
                FWD_PAIRS[i].s, FWD_PAIRS[i].e, fwd * 100.0);
     }
     printf("\n");
 
     /* ----------------------------------------------------------------
-     * 10. Key-rate DV01 for the 5Y BKBM par swap
-     *     Sensitivity to each BKBM IRS calibration input
+     * 10. Key-rate DV01 for 5Y BKBM par swap (wrt BKBM instruments)
      * ---------------------------------------------------------------- */
-    printf("  Key-Rate DV01  (5Y BKBM par swap, per +1bp on each BKBM IRS)\n");
-    print_separator();
-    printf("  %-4s  %-8s  %-12s\n", "Idx", "Mat (Y)", "DV01 (bp/bp)");
-    print_separator();
+    printf("  Key-Rate DV01  (5Y BKBM par swap, per +1bp on each BKBM input)\n");
+    sep();
+    printf("  %-4s  %-8s  %-8s  %-12s\n",
+           "Idx", "Type", "Mat (Y)", "DV01 (bp/bp)");
+    sep();
 
     double dv01[MAX_NODES];
-    computeKeyRateDV01(ibor_instruments, n_ibor, &oisCurve, 5.0, 4, dv01);
+    computeKeyRateDV01(bkbm_inst, n_bkbm, &oisCurve, 5.0, 4, dv01);
 
     double sum_dv01 = 0.0;
-    for (int i = 0; i < n_ibor; i++) {
-        printf("  [%2d]  %6.3f   %+12.6f\n",
-               i, ibor_instruments[i].maturity, dv01[i] * 1e4);
+    for (int i = 0; i < n_bkbm; i++) {
+        printf("  [%2d]  %-7s  %6.3f   %+12.6f\n",
+               i, inst_type_name(bkbm_inst[i].type),
+               bkbm_inst[i].maturity, dv01[i] * 1e4);
         sum_dv01 += dv01[i] * 1e4;
     }
-    print_separator();
+    sep();
     printf("  Sum (approx parallel DV01): %+.6f bp/bp\n\n", sum_dv01);
 
     printf("================================================================\n");

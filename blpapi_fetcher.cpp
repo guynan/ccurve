@@ -1054,35 +1054,44 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
     if (!s || !s->connected || !out || max_instruments <= 0 || !as_of_date)
         return -1;
 
-    enum NzdType { NZD_OIS, NZD_SWAP };
+    enum NzdType { NZD_OIS, NZD_DEPOSIT, NZD_FUTURE, NZD_SWAP };
 
     struct NzdSpec {
         const char *ticker;
         NzdType     itype;
-        double      tenor_y;    /* swap tenor in years; 0 for OIS (from MATURITY) */
-        int         meeting_n;  /* fallback meeting index for OIS maturity */
+        double      tenor_y;    /* pre-known tenor; 0 for OIS/futures */
+        int         meeting_n;  /* OIS fallback: meeting N → N/7 years */
     };
 
     /*
-     * Bootstrap order:
-     *   [0–5]   NDSF1A–NDSF6A  OIS_SWAP  — meeting-dated NZONIA swaps
-     *   [6–13]  NDSWAP3–15     SWAP      — quarterly BKBM IRS vs NZONIA
+     * OIS instruments first (tagged OIS_SWAP), then BKBM instruments
+     * (DEPOSIT, FUTURE, SWAP) in bootstrap order.  The caller splits by type.
+     *
+     *   [0–5]    NDSF1A–6A    OIS_SWAP  — meeting-dated NZONIA
+     *   [6]      NDBB3M       DEPOSIT   — 3M BKBM bank bill
+     *   [7–10]   ZB1–ZB4      FUTURE    — ASX 90-day bank bill futures
+     *   [11–18]  NDSWAP3–15   SWAP      — quarterly BKBM IRS
      */
     static const NzdSpec SPECS[] = {
-        { "NDSF1A Curncy",   NZD_OIS,  0.0,  1 },
-        { "NDSF2A Curncy",   NZD_OIS,  0.0,  2 },
-        { "NDSF3A Curncy",   NZD_OIS,  0.0,  3 },
-        { "NDSF4A Curncy",   NZD_OIS,  0.0,  4 },
-        { "NDSF5A Curncy",   NZD_OIS,  0.0,  5 },
-        { "NDSF6A Curncy",   NZD_OIS,  0.0,  6 },
-        { "NDSWAP3 Curncy",  NZD_SWAP, 3.0,  0 },
-        { "NDSWAP4 Curncy",  NZD_SWAP, 4.0,  0 },
-        { "NDSWAP5 Curncy",  NZD_SWAP, 5.0,  0 },
-        { "NDSWAP6 Curncy",  NZD_SWAP, 6.0,  0 },
-        { "NDSWAP7 Curncy",  NZD_SWAP, 7.0,  0 },
-        { "NDSWAP10 Curncy", NZD_SWAP, 10.0, 0 },
-        { "NDSWAP12 Curncy", NZD_SWAP, 12.0, 0 },
-        { "NDSWAP15 Curncy", NZD_SWAP, 15.0, 0 },
+        { "NDSF1A Curncy",   NZD_OIS,     0.0,  1 },
+        { "NDSF2A Curncy",   NZD_OIS,     0.0,  2 },
+        { "NDSF3A Curncy",   NZD_OIS,     0.0,  3 },
+        { "NDSF4A Curncy",   NZD_OIS,     0.0,  4 },
+        { "NDSF5A Curncy",   NZD_OIS,     0.0,  5 },
+        { "NDSF6A Curncy",   NZD_OIS,     0.0,  6 },
+        { "NDBB3M Curncy",   NZD_DEPOSIT, 0.25, 0 },
+        { "ZB1 Comdty",      NZD_FUTURE,  0.0,  0 },
+        { "ZB2 Comdty",      NZD_FUTURE,  0.0,  0 },
+        { "ZB3 Comdty",      NZD_FUTURE,  0.0,  0 },
+        { "ZB4 Comdty",      NZD_FUTURE,  0.0,  0 },
+        { "NDSWAP3 Curncy",  NZD_SWAP,    3.0,  0 },
+        { "NDSWAP4 Curncy",  NZD_SWAP,    4.0,  0 },
+        { "NDSWAP5 Curncy",  NZD_SWAP,    5.0,  0 },
+        { "NDSWAP6 Curncy",  NZD_SWAP,    6.0,  0 },
+        { "NDSWAP7 Curncy",  NZD_SWAP,    7.0,  0 },
+        { "NDSWAP10 Curncy", NZD_SWAP,    10.0, 0 },
+        { "NDSWAP12 Curncy", NZD_SWAP,    12.0, 0 },
+        { "NDSWAP15 Curncy", NZD_SWAP,    15.0, 0 },
     };
     static constexpr int NSPECS =
         static_cast<int>(sizeof(SPECS) / sizeof(SPECS[0]));
@@ -1094,8 +1103,9 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
         ticker_ptrs[i] = SPECS[i].ticker;
     ticker_ptrs[n_to_fetch] = nullptr;
 
-    /* MATURITY gives the swap/OIS maturity date; LAST_TRADEABLE_DT as fallback */
-    const char *fields[] = { "MID", "MATURITY", "LAST_TRADEABLE_DT", nullptr };
+    const char *fields[] = {
+        "MID", "PX_LAST", "LAST_TRADEABLE_DT", "MATURITY", nullptr
+    };
 
     int nresults = 0;
     BlpRefResult *raw = blp_fetch_bdp(s, ticker_ptrs, fields,
@@ -1110,17 +1120,26 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
 
     struct ParsedResult {
         double rate;
-        char   mat_str[64];  /* maturity date string from MATURITY or fallback */
+        double price;
+        char   ltd_str[64];  /* LAST_TRADEABLE_DT for futures              */
+        char   mat_str[64];  /* MATURITY for OIS; also fallback for futures */
         bool   rate_ok;
+        bool   price_ok;
+        bool   ltd_ok;
         bool   mat_ok;
     };
 
     std::vector<ParsedResult> parsed(static_cast<std::size_t>(n_to_fetch));
     for (int i = 0; i < n_to_fetch; ++i) {
-        parsed[static_cast<std::size_t>(i)].rate    = 0.0;
-        parsed[static_cast<std::size_t>(i)].rate_ok = false;
-        parsed[static_cast<std::size_t>(i)].mat_ok  = false;
-        parsed[static_cast<std::size_t>(i)].mat_str[0] = '\0';
+        ParsedResult &pr = parsed[static_cast<std::size_t>(i)];
+        pr.rate      = 0.0;
+        pr.price     = 0.0;
+        pr.rate_ok   = false;
+        pr.price_ok  = false;
+        pr.ltd_ok    = false;
+        pr.mat_ok    = false;
+        pr.ltd_str[0] = '\0';
+        pr.mat_str[0] = '\0';
     }
 
     for (int ri = 0; ri < nresults; ++ri) {
@@ -1139,7 +1158,13 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
         if (f == "MID") {
             pr.rate    = r.value / 100.0;
             pr.rate_ok = true;
-        } else if ((f == "MATURITY" || f == "LAST_TRADEABLE_DT") && !pr.mat_ok) {
+        } else if (f == "PX_LAST") {
+            pr.price    = r.value;
+            pr.price_ok = true;
+        } else if (f == "LAST_TRADEABLE_DT") {
+            safe_copy(pr.ltd_str, sizeof(pr.ltd_str), r.str_value);
+            pr.ltd_ok = (pr.ltd_str[0] != '\0');
+        } else if (f == "MATURITY" && !pr.mat_ok) {
             safe_copy(pr.mat_str, sizeof(pr.mat_str), r.str_value);
             pr.mat_ok = (pr.mat_str[0] != '\0');
         }
@@ -1153,8 +1178,6 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
         const NzdSpec &spec = SPECS[i];
         ParsedResult  &pr   = parsed[static_cast<std::size_t>(i)];
 
-        if (!pr.rate_ok) continue;
-
         MarketInstrument &inst = out[written];
         std::memset(&inst, 0, sizeof(MarketInstrument));
 
@@ -1167,10 +1190,8 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
 
         case NZD_OIS:
         {
-            /*
-             * Maturity from Bloomberg MATURITY field.
-             * Fallback: RBNZ meets ~7 times/year, so meeting N ≈ N/7 years.
-             */
+            if (!pr.rate_ok) continue;
+            /* Maturity from MATURITY field; fallback N / 7 years (RBNZ ~7/yr) */
             double maturity_yf = 0.0;
             if (pr.mat_ok) {
                 const DateTime mat = parse_blp_date_string(pr.mat_str);
@@ -1188,7 +1209,40 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
             break;
         }
 
+        case NZD_DEPOSIT:
+            if (!pr.rate_ok) continue;
+            inst.type             = DEPOSIT;
+            inst.startTime        = 0.0;
+            inst.maturity         = spec.tenor_y;
+            inst.rate             = pr.rate;
+            inst.paymentFrequency = 4;
+            break;
+
+        case NZD_FUTURE:
+        {
+            if (!pr.price_ok) continue;
+            double maturity_yf = 0.0;
+            if (pr.ltd_ok) {
+                const DateTime ltd = parse_blp_date_string(pr.ltd_str);
+                if (ltd.year > 0)
+                    maturity_yf = calculateYearFraction(as_of, ltd);
+            }
+            if (maturity_yf <= 0.0) {
+                /* Fallback: ZB1≈Q1, ZB2≈Q2 — digit at position 2 */
+                const char d = spec.ticker[2];
+                const int  q = (d >= '1' && d <= '9') ? (d - '0') : 1;
+                maturity_yf  = static_cast<double>(q) * 0.25;
+            }
+            inst.type             = FUTURE;
+            inst.startTime        = std::max(0.0, maturity_yf - 0.25);
+            inst.maturity         = maturity_yf;
+            inst.price            = pr.price;
+            inst.paymentFrequency = 4;
+            break;
+        }
+
         case NZD_SWAP:
+            if (!pr.rate_ok) continue;
             inst.type             = SWAP;
             inst.startTime        = 0.0;
             inst.maturity         = spec.tenor_y;
