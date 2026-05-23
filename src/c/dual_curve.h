@@ -121,6 +121,7 @@ typedef struct {
     SwapCashFlow *periods;
     int32_t       numPeriods;
     int32_t       isFixed;
+    RateIndexType rateConv;   /* floating-rate convention; 0 = IBOR_TERM (default) */
 } SwapLeg;
 
 typedef struct {
@@ -224,6 +225,14 @@ void computeKeyRateDV01(const MarketInstrument  *instruments,
                         double                  *out_dv01);
 
 /* Swap analytics */
+
+/* Project a floating coupon rate from projCurve using the given convention.
+ * When cf->resetTime/obsWindowStart/obsWindowEnd are zero, falls back to
+ * (startTime, endTime) — identical to computeImpliedForwardRate. */
+double computeFloatRate(const SwapCashFlow      *cf,
+                        const InterestRateCurve *projCurve,
+                        RateIndexType            conv);
+
 double computeImpliedForwardRate(const InterestRateCurve *fwdCurve,
                                  double tStart, double tEnd, double dt);
 double calculateLegPV(SwapLeg *leg,

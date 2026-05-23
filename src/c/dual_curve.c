@@ -563,23 +563,62 @@ double computeImpliedForwardRate(const InterestRateCurve *fwdCurve,
     return (dfStart / dfEnd - 1.0) / dt;
 }
 
+double computeFloatRate(const SwapCashFlow *cf,
+                        const InterestRateCurve *projCurve,
+                        RateIndexType conv)
+{
+    double dcf = cf->accrualFraction;
+    if (dcf <= 0.0) return 0.0;
+
+    /* Resolve observation window, falling back to [startTime, endTime] when
+     * the extended fields are zero (default, backward-compatible). */
+    double obsStart = (cf->obsWindowStart != 0.0) ? cf->obsWindowStart : cf->startTime;
+    double obsEnd   = (cf->obsWindowEnd   != 0.0) ? cf->obsWindowEnd   : cf->endTime;
+    double resetT   = (cf->resetTime      != 0.0) ? cf->resetTime      : cf->startTime;
+
+    double dfStart, dfEnd;
+    switch (conv) {
+    case RATE_IDX_OIS_AVERAGE:
+        /* Continuous-rate approximation of arithmetic average of daily ON rates:
+         * r_avg ≈ ln(DF(obsStart) / DF(obsEnd)) / dcf  */
+        dfStart = getDiscountFactor(projCurve, obsStart);
+        dfEnd   = getDiscountFactor(projCurve, obsEnd);
+        if (dfEnd <= 0.0) return 0.0;
+        return log(dfStart / dfEnd) / dcf;
+
+    case RATE_IDX_OIS_COMPOUND:
+        /* Compound in-arrears: discount factor ratio over full accrual period */
+        dfStart = getDiscountFactor(projCurve, cf->startTime);
+        dfEnd   = getDiscountFactor(projCurve, cf->endTime);
+        if (dfEnd <= 0.0) return 0.0;
+        return (dfStart / dfEnd - 1.0) / dcf;
+
+    case RATE_IDX_TERM_SOFR:
+    case RATE_IDX_IBOR_TERM:
+    default:
+        /* Forward-looking term rate fixed at resetT, spanning obsStart→obsEnd */
+        dfStart = getDiscountFactor(projCurve, (resetT < obsStart) ? resetT : obsStart);
+        dfEnd   = getDiscountFactor(projCurve, obsEnd);
+        if (dfEnd <= 0.0) return 0.0;
+        return (dfStart / dfEnd - 1.0) / dcf;
+    }
+}
+
 double calculateLegPV(SwapLeg *leg,
                       const InterestRateCurve *fwdCurve,
                       const InterestRateCurve *oisCurve)
 {
     double legPV = 0.0;
     for (int32_t i = 0; i < leg->numPeriods; i++) {
-        SwapCashFlow cf      = leg->periods[i];
-        double dfDiscount    = getDiscountFactor(oisCurve, cf.paymentTime);
+        SwapCashFlow *cf   = &leg->periods[i];
+        double dfDiscount  = getDiscountFactor(oisCurve, cf->paymentTime);
         double rate;
         if (leg->isFixed) {
-            rate = cf.fixedRate;
+            rate = cf->fixedRate;
         } else {
-            rate = computeImpliedForwardRate(fwdCurve, cf.startTime,
-                                             cf.endTime, cf.accrualFraction)
-                 + cf.spread;
+            rate = computeFloatRate(cf, fwdCurve, leg->rateConv) + cf->spread;
         }
-        legPV += cf.notional * rate * cf.accrualFraction * dfDiscount;
+        legPV += cf->notional * rate * cf->accrualFraction * dfDiscount;
     }
     return legPV;
 }
