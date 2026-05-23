@@ -174,19 +174,20 @@ class XCCYBridge:
         computeXCCYDV01
 
     To build the shared library (from the ccurve repo root):
-        gcc -O2 -shared -fPIC -o libccurve.so \
-            date_utils.c dual_curve.c xccy_swap.c -lm
+        make
     """
 
-    def __init__(self, lib_path: str = "./libccurve.so"):
+    def __init__(self, lib_path: str = None):
+        if lib_path is None:
+            _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            lib_path = os.path.join(_repo_root, "libcurve_engine.so")
         if not os.path.exists(lib_path):
             raise FileNotFoundError(
                 f"Shared library not found at '{lib_path}'.\n"
                 "Build it with:\n"
-                "  gcc -O2 -shared -fPIC -o libccurve.so \\\n"
-                "      date_utils.c dual_curve.c xccy_swap.c -lm"
+                "  make  (from the repo root)"
             )
-        self._lib = ctypes.CDLL(os.path.abspath(lib_path))
+        self._lib = ctypes.CDLL(lib_path)
         self._bind_signatures()
 
     # ------------------------------------------------------------------
