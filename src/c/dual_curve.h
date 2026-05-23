@@ -37,11 +37,33 @@ typedef struct {
 } CentralBankSchedule;
 
 typedef enum {
-    DEPOSIT  = 0,
+    DEPOSIT    = 0,
     FUTURE,
     SWAP,
-    OIS_SWAP
+    OIS_SWAP,
+    ASSET_SWAP  /* priced against calibrated curve; not a bootstrap calibration input */
 } InstrumentType;
+
+/* Rate index convention — controls how a floating coupon is observed and paid.
+ * Zero-initialised defaults map to IBOR_TERM with no lags (current behaviour). */
+typedef enum {
+    RATE_IDX_IBOR_TERM    = 0, /* forward-looking term rate (LIBOR, BKBM, EURIBOR) */
+    RATE_IDX_OIS_COMPOUND,     /* overnight compound in-arrears (SOFR, SONIA, ESTR) */
+    RATE_IDX_OIS_AVERAGE,      /* overnight simple-average (SOFR Averages) */
+    RATE_IDX_TERM_SOFR         /* CME Term SOFR — forward-looking, priced like IBOR */
+} RateIndexType;
+
+typedef struct {
+    RateIndexType         indexType;       /* default 0 = IBOR_TERM                 */
+    double                tenorYears;      /* observation tenor: 0.25=3M, 0.5=6M    */
+    int                   resetLagDays;    /* biz days before period start (-2=IBOR) */
+    int                   paymentLagDays;  /* biz days after period end              */
+    int                   lookbackDays;    /* SOFR: shift obs window back N days     */
+    int                   lockoutDays;     /* SOFR: freeze last N days of window     */
+    DayCountFraction      dcf;
+    BusinessDayAdjustment bda;
+    char                  calendarName[32];
+} FloatingRateIndex;
 
 typedef struct {
     InstrumentType      type;
@@ -50,10 +72,11 @@ typedef struct {
     double              rate;
     double              price;
     int32_t             paymentFrequency;
-    DayCountFraction    fixedDcf;       /* day count for fixed leg  (0 = Act/365) */
-    DayCountFraction    floatDcf;       /* day count for float leg  (0 = Act/365) */
-    BusinessDayAdjustment bda;          /* business day convention  (0 = none)    */
-    char                calendarName[32]; /* e.g. "USD" — loaded at parse time   */
+    DayCountFraction    fixedDcf;         /* day count for fixed leg  (0 = Act/365) */
+    DayCountFraction    floatDcf;         /* day count for float leg  (0 = Act/365) */
+    BusinessDayAdjustment bda;            /* business day convention  (0 = none)    */
+    char                calendarName[32]; /* e.g. "USD" — loaded at parse time      */
+    FloatingRateIndex   floatIndex;       /* full float-leg conventions (zero = default IBOR) */
 } MarketInstrument;
 
 typedef struct InterestRateCurve {
@@ -84,11 +107,14 @@ typedef struct {
 typedef struct {
     double startTime;
     double endTime;
-    double paymentTime;
+    double paymentTime;      /* may differ from endTime when paymentLagDays != 0 */
     double accrualFraction;
     double fixedRate;
     double spread;
     double notional;
+    double resetTime;        /* rate fixing date; 0 → use startTime */
+    double obsWindowStart;   /* compounding/averaging window start; 0 → startTime */
+    double obsWindowEnd;     /* compounding/averaging window end; 0 → endTime */
 } SwapCashFlow;
 
 typedef struct {
@@ -128,6 +154,19 @@ typedef struct {
 /* ================================================================== */
 /*  Function declarations                                              */
 /* ================================================================== */
+
+/* Schedule builder: fills out[0..n-1] for a vanilla swap leg.
+ * Returns number of periods written, or -1 on error.
+ * floatIdx == NULL → zero lags, IBOR_TERM (identical to current behaviour). */
+int buildSwapSchedule(SwapCashFlow            *out,
+                      int                      maxPeriods,
+                      double                   startTime,
+                      double                   maturity,
+                      int                      frequency,
+                      double                   fixedRateOrSpread,
+                      double                   notional,
+                      int                      isFixed,
+                      const FloatingRateIndex *floatIdx);
 
 /* OIS robustness: anchor short-end rate and insert continuity node */
 void setOisAnchorRate(InterestRateCurve *oisCurve, double anchorRate);

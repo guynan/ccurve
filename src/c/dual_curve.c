@@ -9,6 +9,48 @@
 #include "file_utils.h"
 
 /* ================================================================== */
+/*  Schedule builder                                                   */
+/* ================================================================== */
+
+int buildSwapSchedule(SwapCashFlow *out, int maxPeriods,
+                      double startTime, double maturity, int frequency,
+                      double fixedRateOrSpread, double notional, int isFixed,
+                      const FloatingRateIndex *floatIdx)
+{
+    int nPeriods = (int)round((maturity - startTime) * frequency);
+    if (nPeriods <= 0 || nPeriods > maxPeriods) return -1;
+    double dt = 1.0 / (double)frequency;
+
+    for (int i = 0; i < nPeriods; i++) {
+        double tStart = startTime + i * dt;
+        double tEnd   = startTime + (i + 1) * dt;
+        double tPay   = tEnd;
+        double tReset = tStart;
+        double obsStart = tStart;
+        double obsEnd   = tEnd;
+
+        if (floatIdx != NULL) {
+            tPay    = tEnd   + floatIdx->paymentLagDays / 260.0;
+            tReset  = tStart - floatIdx->resetLagDays   / 260.0;
+            obsStart = tStart - floatIdx->lookbackDays   / 365.0;
+            obsEnd   = tEnd   - floatIdx->lockoutDays    / 365.0;
+        }
+
+        out[i].startTime      = tStart;
+        out[i].endTime        = tEnd;
+        out[i].paymentTime    = tPay;
+        out[i].accrualFraction = tEnd - tStart;
+        out[i].fixedRate      = isFixed ? fixedRateOrSpread : 0.0;
+        out[i].spread         = isFixed ? 0.0 : fixedRateOrSpread;
+        out[i].notional       = notional;
+        out[i].resetTime      = tReset;
+        out[i].obsWindowStart = obsStart;
+        out[i].obsWindowEnd   = obsEnd;
+    }
+    return nPeriods;
+}
+
+/* ================================================================== */
 /*  Par swap rate solver                                               */
 /* ================================================================== */
 
@@ -61,8 +103,167 @@ double solveForwardParSwapRate(const InterestRateCurve *fwdCurve,
 }
 
 /* ================================================================== */
-/*  Bootstrap engine                                                   */
+/*  Bootstrap engine — instrument plugin table                         */
 /* ================================================================== */
+
+/* Forward declaration so plugin functions can reference the type */
+typedef int (*InstrumentBootstrapFn)(InterestRateCurve *fwd,
+                                     const InterestRateCurve *disc,
+                                     const MarketInstrument *inst,
+                                     const CurveConstructionParams *params);
+
+/* Evaluates swap NPV for a trial zero rate at maturity.
+ * Temporarily sets fwd->times/rates/dfs[idx] and rebuilds spline.
+ * idx must equal fwd->numNodes before the first call. */
+static double evalSwapNpv(InterestRateCurve *fwd,
+                          const InterestRateCurve *disc,
+                          int idx, double t_maturity,
+                          double dt, int totalPeriods,
+                          double swapRate, double trialRate)
+{
+    fwd->times[idx] = t_maturity;
+    fwd->rates[idx] = trialRate;
+    fwd->dfs[idx]   = exp(-trialRate * t_maturity);
+    fwd->numNodes   = idx + 1;
+    setupLogDfCubicSpline(fwd);
+
+    double pvFloat = 0.0, pvFixed = 0.0, tPrev = 0.0;
+    for (int p = 1; p <= totalPeriods; p++) {
+        double tPay   = p * dt;
+        double dfDisc = getDiscountFactor(disc, tPay);
+        double dfFwdS = getDiscountFactor(fwd, tPrev);
+        double dfFwdE = getDiscountFactor(fwd, tPay);
+        double fwdRate = (dfFwdS / dfFwdE - 1.0) / dt;
+        pvFloat += fwdRate * dt * dfDisc;
+        pvFixed += swapRate * dt * dfDisc;
+        tPrev = tPay;
+    }
+    return pvFloat - pvFixed;
+}
+
+static int bootstrapDeposit(InterestRateCurve *fwd,
+                            const InterestRateCurve *disc,
+                            const MarketInstrument *inst,
+                            const CurveConstructionParams *params)
+{
+    (void)disc; (void)params;
+    int idx = fwd->numNodes;
+    double t     = inst->maturity;
+    double delta = t - inst->startTime;
+    double df    = 1.0 / (1.0 + inst->rate * delta);
+    fwd->times[idx] = t;
+    fwd->dfs[idx]   = df;
+    fwd->rates[idx] = (t > 0.0) ? (-log(df) / t) : inst->rate;
+    fwd->numNodes++;
+    /* setupMonotoneConvex rebuilds the incremental spline used
+     * by getDiscountFactor during mid-bootstrap node lookups.
+     * This is separate from the final post-bootstrap regime
+     * assignment controlled by CurveConstructionParams. */
+    setupMonotoneConvex(fwd);
+    return 0;
+}
+
+static int bootstrapFuture(InterestRateCurve *fwd,
+                           const InterestRateCurve *disc,
+                           const MarketInstrument *inst,
+                           const CurveConstructionParams *params)
+{
+    (void)disc;
+    int    idx        = fwd->numNodes;
+    double t_start    = inst->startTime;
+    double t_end      = inst->maturity;
+    double delta_t    = t_end - t_start;
+    double impliedFwd = (100.0 - inst->price) / 100.0;
+
+    /* Hull-White convexity adjustment: 0.5 * sigma^2 * t_start * t_end */
+    if (params != NULL && params->convexity.sigma > 0.0) {
+        double s = params->convexity.sigma;
+        impliedFwd -= 0.5 * s * s * t_start * t_end;
+    }
+
+    double df_start = getDiscountFactor(fwd, t_start);
+    double df_end   = df_start / (1.0 + impliedFwd * delta_t);
+    fwd->times[idx] = t_end;
+    fwd->dfs[idx]   = df_end;
+    fwd->rates[idx] = (t_end > 0.0) ? (-log(df_end) / t_end) : 0.0;
+    fwd->numNodes++;
+    setupMonotoneConvex(fwd);
+    return 0;
+}
+
+static int bootstrapSwap(InterestRateCurve *fwd,
+                         const InterestRateCurve *disc,
+                         const MarketInstrument *inst,
+                         const CurveConstructionParams *params)
+{
+    (void)params;
+    int    idx          = fwd->numNodes;
+    double t_maturity   = inst->maturity;
+    double swapRate     = inst->rate;
+    int    freq         = inst->paymentFrequency;
+    int    totalPeriods = (int)round(t_maturity * freq);
+    double dt           = 1.0 / (double)freq;
+
+    double z = swapRate;
+    if (z < -0.02) z = -0.02;
+    if (z >  0.20) z =  0.20;
+
+    int converged = 0;
+    for (int iter = 0; iter < NR_MAX_ITER; iter++) {
+        double f      = evalSwapNpv(fwd, disc, idx, t_maturity, dt, totalPeriods, swapRate, z);
+        if (fabs(f) < NR_TOLERANCE) { converged = 1; break; }
+        double f_pert = evalSwapNpv(fwd, disc, idx, t_maturity, dt, totalPeriods, swapRate, z + NR_DERIV_EPS);
+        double fprime = (f_pert - f) / NR_DERIV_EPS;
+        if (fabs(fprime) < 1e-15) break;
+        double step = f / fprime;
+        if (step >  0.005) step =  0.005;
+        if (step < -0.005) step = -0.005;
+        z -= step;
+    }
+
+    if (!converged) {
+        double lo = -0.05, hi = 0.50;
+        double f_lo = evalSwapNpv(fwd, disc, idx, t_maturity, dt, totalPeriods, swapRate, lo);
+        double f_hi = evalSwapNpv(fwd, disc, idx, t_maturity, dt, totalPeriods, swapRate, hi);
+        int expand = 0;
+        while (f_lo * f_hi > 0.0 && expand < 20) {
+            lo -= 0.01; hi += 0.01;
+            f_lo = evalSwapNpv(fwd, disc, idx, t_maturity, dt, totalPeriods, swapRate, lo);
+            f_hi = evalSwapNpv(fwd, disc, idx, t_maturity, dt, totalPeriods, swapRate, hi);
+            expand++;
+        }
+        double mid = 0.0, f_mid = 0.0;
+        for (int bis = 0; bis < 100; bis++) {
+            mid   = 0.5 * (lo + hi);
+            f_mid = evalSwapNpv(fwd, disc, idx, t_maturity, dt, totalPeriods, swapRate, mid);
+            if (fabs(f_mid) < NR_TOLERANCE) break;
+            if (f_lo * f_mid < 0.0) hi = mid;
+            else { lo = mid; f_lo = f_mid; }
+        }
+        z = mid;
+    }
+
+    fwd->times[idx] = t_maturity;
+    fwd->rates[idx] = z;
+    fwd->dfs[idx]   = exp(-z * t_maturity);
+    fwd->numNodes   = idx + 1;
+    setupMonotoneConvex(fwd);
+    return 0;
+}
+
+typedef struct {
+    InstrumentType        type;
+    InstrumentBootstrapFn bootstrap;
+} InstrumentPlugin;
+
+static InstrumentPlugin g_plugins[] = {
+    { DEPOSIT,  bootstrapDeposit },
+    { FUTURE,   bootstrapFuture  },
+    { SWAP,     bootstrapSwap    },
+    { OIS_SWAP, bootstrapSwap    }, /* same handler; disc = fwdCurve (self-discounted) */
+    /* ASSET_SWAP: not a bootstrap input — no plugin entry needed */
+};
+static const int N_PLUGINS = (int)(sizeof(g_plugins) / sizeof(g_plugins[0]));
 
 int bootstrapCurve(InterestRateCurve            *fwdCurve,
                    const InterestRateCurve       *oisCurve,
@@ -71,147 +272,35 @@ int bootstrapCurve(InterestRateCurve            *fwdCurve,
                    const CurveConstructionParams *params)
 {
     /* Anchor node: t=0, DF=1, rate = first instrument's rate */
-    fwdCurve->numNodes  = 0;
-    fwdCurve->times[0]  = 0.0;
-    fwdCurve->rates[0]  = instruments[0].rate;
-    fwdCurve->dfs[0]    = 1.0;
-    fwdCurve->numNodes  = 1;
+    fwdCurve->numNodes = 0;
+    fwdCurve->times[0] = 0.0;
+    fwdCurve->rates[0] = instruments[0].rate;
+    fwdCurve->dfs[0]   = 1.0;
+    fwdCurve->numNodes = 1;
 
     for (int i = 0; i < numInstruments; i++) {
         const MarketInstrument *inst = &instruments[i];
-        int idx = fwdCurve->numNodes;
 
         if (fwdCurve->numNodes >= MAX_NODES) {
             fprintf(stderr, "bootstrapCurve: MAX_NODES (%d) exceeded\n", MAX_NODES);
             return -1;
         }
 
-        /* ---------------------------------------------------------- */
-        if (inst->type == DEPOSIT) {
-            double t     = inst->maturity;
-            double delta = t - inst->startTime;
-            double df    = 1.0 / (1.0 + inst->rate * delta);
+        /* OIS_SWAP is self-discounted; all others discount on oisCurve */
+        const InterestRateCurve *disc =
+            (inst->type == OIS_SWAP) ? fwdCurve : oisCurve;
 
-            fwdCurve->times[idx] = t;
-            fwdCurve->dfs[idx]   = df;
-            fwdCurve->rates[idx] = (t > 0.0) ? (-log(df) / t) : inst->rate;
-            fwdCurve->numNodes++;
-            /* setupMonotoneConvex rebuilds the incremental spline used
-             * by getDiscountFactor during mid-bootstrap node lookups.
-             * This is separate from the final post-bootstrap regime
-             * assignment controlled by CurveConstructionParams. */
-            setupMonotoneConvex(fwdCurve);
-        }
-
-        /* ---------------------------------------------------------- */
-        else if (inst->type == FUTURE) {
-            double t_start        = inst->startTime;
-            double t_end          = inst->maturity;
-            double delta_t        = t_end - t_start;
-            double impliedFwdRate = (100.0 - inst->price) / 100.0;
-
-            /* Convexity adjustment: 0.5 * sigma^2 * t_start * t_end
-             * Applied when params->convexity.sigma > 0. */
-            if (params != NULL && params->convexity.sigma > 0.0) {
-                double s = params->convexity.sigma;
-                impliedFwdRate -= 0.5 * s * s * t_start * t_end;
+        int handled = 0;
+        for (int k = 0; k < N_PLUGINS; k++) {
+            if (g_plugins[k].type == inst->type) {
+                g_plugins[k].bootstrap(fwdCurve, disc, inst, params);
+                handled = 1;
+                break;
             }
-
-            double df_start = getDiscountFactor(fwdCurve, t_start);
-            double df_end   = df_start / (1.0 + impliedFwdRate * delta_t);
-
-            fwdCurve->times[idx] = t_end;
-            fwdCurve->dfs[idx]   = df_end;
-            fwdCurve->rates[idx] = (t_end > 0.0) ? (-log(df_end) / t_end) : 0.0;
-            fwdCurve->numNodes++;
-            setupMonotoneConvex(fwdCurve);
         }
-
-        /* ---------------------------------------------------------- */
-        else if (inst->type == SWAP || inst->type == OIS_SWAP) {
-            double t_maturity   = inst->maturity;
-            double swapRate     = inst->rate;
-            int    freq         = inst->paymentFrequency;
-            int    totalPeriods = (int)round(t_maturity * freq);
-            double dt           = 1.0 / (double)freq;
-
-            /* For OIS_SWAP the discount curve equals the forward curve
-             * (self-discounted single-curve bootstrap). */
-            const InterestRateCurve *discCurve =
-                (inst->type == OIS_SWAP) ? fwdCurve : oisCurve;
-
-#define EVAL_SWAP_NPV(trial_rate_, npv_out_)                              \
-            do {                                                           \
-                fwdCurve->times[idx] = t_maturity;                        \
-                fwdCurve->rates[idx] = (trial_rate_);                     \
-                fwdCurve->dfs[idx]   = exp(-(trial_rate_) * t_maturity);  \
-                fwdCurve->numNodes   = idx + 1;                           \
-                setupLogDfCubicSpline(fwdCurve);                          \
-                double _pvFloat = 0.0, _pvFixed = 0.0, _tPrev = 0.0;     \
-                for (int _p = 1; _p <= totalPeriods; _p++) {              \
-                    double _tPay   = _p * dt;                             \
-                    double _dfDisc = getDiscountFactor(discCurve, _tPay); \
-                    double _dfFwdS = getDiscountFactor(fwdCurve, _tPrev); \
-                    double _dfFwdE = getDiscountFactor(fwdCurve, _tPay);  \
-                    double _fwd    = (_dfFwdS / _dfFwdE - 1.0) / dt;     \
-                    _pvFloat += _fwd      * dt * _dfDisc;                 \
-                    _pvFixed += swapRate  * dt * _dfDisc;                 \
-                    _tPrev = _tPay;                                        \
-                }                                                          \
-                (npv_out_) = _pvFloat - _pvFixed;                         \
-            } while (0)
-
-            double z = swapRate;
-            if (z < -0.02) z = -0.02;
-            if (z >  0.20) z =  0.20;
-
-            double f = 0.0, f_pert = 0.0, fprime, step;
-            int    converged = 0;
-
-            for (int iter = 0; iter < NR_MAX_ITER; iter++) {
-                EVAL_SWAP_NPV(z, f);
-                if (fabs(f) < NR_TOLERANCE) { converged = 1; break; }
-
-                EVAL_SWAP_NPV(z + NR_DERIV_EPS, f_pert);
-                fprime = (f_pert - f) / NR_DERIV_EPS;
-                if (fabs(fprime) < 1e-15) break;
-
-                step = f / fprime;
-                if (step >  0.005) step =  0.005;
-                if (step < -0.005) step = -0.005;
-                z -= step;
-            }
-
-            if (!converged) {
-                double lo = -0.05, hi = 0.50;
-                double f_lo, f_hi, f_mid = 0.0, mid = 0.0;
-                EVAL_SWAP_NPV(lo, f_lo);
-                EVAL_SWAP_NPV(hi, f_hi);
-                int expand = 0;
-                while (f_lo * f_hi > 0.0 && expand < 20) {
-                    lo -= 0.01; hi += 0.01;
-                    EVAL_SWAP_NPV(lo, f_lo);
-                    EVAL_SWAP_NPV(hi, f_hi);
-                    expand++;
-                }
-                for (int bis = 0; bis < 100; bis++) {
-                    mid = 0.5 * (lo + hi);
-                    EVAL_SWAP_NPV(mid, f_mid);
-                    if (fabs(f_mid) < NR_TOLERANCE) break;
-                    if (f_lo * f_mid < 0.0) hi = mid;
-                    else { lo = mid; f_lo = f_mid; }
-                }
-                z = mid;
-            }
-
-#undef EVAL_SWAP_NPV
-
-            fwdCurve->times[idx] = t_maturity;
-            fwdCurve->rates[idx] = z;
-            fwdCurve->dfs[idx]   = exp(-z * t_maturity);
-            fwdCurve->numNodes   = idx + 1;
-            setupMonotoneConvex(fwdCurve);
-        }
+        if (!handled)
+            fprintf(stderr, "bootstrapCurve: unknown instrument type %d, skipping\n",
+                    (int)inst->type);
     }
 
     /* ------------------------------------------------------------------
@@ -629,7 +718,7 @@ double run_swap_analytics_bridge(double *fixedSchedule, double *floatingSchedule
 
 int32_t main(int32_t argc, char **argv)
 {
-    const char *inputFile       = "in_files/market_data_expanded.json";
+    const char *inputFile       = "examples/data/market_data_expanded.json";
     const char *curveAnchorToday = "2026-05-19";
     if (argc > 1) inputFile = argv[1];
 
