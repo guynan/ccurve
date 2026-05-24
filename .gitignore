@@ -7,6 +7,7 @@ __pycache__/
 *.so
 a.out
 gmon.out
+*.dSYM
 
 # Distribution / packaging
 .Python
