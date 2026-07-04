@@ -41,7 +41,16 @@ typedef enum {
     FUTURE,
     SWAP,
     OIS_SWAP,
-    ASSET_SWAP  /* priced against calibrated curve; not a bootstrap calibration input */
+    ASSET_SWAP, /* priced against calibrated curve; not a bootstrap calibration input */
+    FX_SWAP     /* FX swap: implies foreign DF from domestic DF and forward outright
+                 * Encoded via MarketInstrument fields:
+                 *   rate     = FX spot     (units of domestic per 1 unit foreign)
+                 *   price    = FX forward outright at maturity (same units)
+                 *   maturity = swap tenor in years
+                 * The bootstrap treats disc curve as the *domestic* reference:
+                 *   DF_for(T) = DF_dom(T) * spot / forward
+                 * Foreign zero rate = -log(DF_for(T)) / T is written to the fwd curve.
+                 */
 } InstrumentType;
 
 /* Rate index convention — controls how a floating coupon is observed and paid.

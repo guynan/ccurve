@@ -251,6 +251,39 @@ static int bootstrapSwap(InterestRateCurve *fwd,
     return 0;
 }
 
+/* FX swap: DF_for(T) = DF_dom(T) * S / F, with disc curve acting as the domestic
+ * reference. Writes an implied foreign zero rate node onto the forward curve. */
+static int bootstrapFxSwap(InterestRateCurve *fwd,
+                           const InterestRateCurve *disc,
+                           const MarketInstrument *inst,
+                           const CurveConstructionParams *params)
+{
+    (void)params;
+    int    idx = fwd->numNodes;
+    double t   = inst->maturity;
+    double S   = inst->rate;   /* FX spot (dom per for)     */
+    double F   = inst->price;  /* FX forward outright       */
+
+    if (t <= 0.0 || S <= 0.0 || F <= 0.0) {
+        fprintf(stderr, "bootstrapFxSwap: invalid params t=%g S=%g F=%g\n", t, S, F);
+        return -1;
+    }
+
+    double df_dom = getDiscountFactor(disc, t);
+    double df_for = df_dom * S / F;
+    if (df_for <= 0.0) {
+        fprintf(stderr, "bootstrapFxSwap: non-positive implied DF_for=%g\n", df_for);
+        return -1;
+    }
+
+    fwd->times[idx] = t;
+    fwd->dfs[idx]   = df_for;
+    fwd->rates[idx] = -log(df_for) / t;
+    fwd->numNodes++;
+    setupMonotoneConvex(fwd);
+    return 0;
+}
+
 typedef struct {
     InstrumentType        type;
     InstrumentBootstrapFn bootstrap;
@@ -261,6 +294,7 @@ static InstrumentPlugin g_plugins[] = {
     { FUTURE,   bootstrapFuture  },
     { SWAP,     bootstrapSwap    },
     { OIS_SWAP, bootstrapSwap    }, /* same handler; disc = fwdCurve (self-discounted) */
+    { FX_SWAP,  bootstrapFxSwap  }, /* front-end of a foreign curve via FX-implied DF */
     /* ASSET_SWAP: not a bootstrap input — no plugin entry needed */
 };
 static const int N_PLUGINS = (int)(sizeof(g_plugins) / sizeof(g_plugins[0]));
@@ -271,10 +305,12 @@ int bootstrapCurve(InterestRateCurve            *fwdCurve,
                    int32_t                        numInstruments,
                    const CurveConstructionParams *params)
 {
-    /* Anchor node: t=0, DF=1, rate = first instrument's rate */
+    /* Anchor node: t=0, DF=1. Rate is only cosmetic (interpolation uses dfs),
+     * so avoid using inst[0].rate when the field is repurposed (FX_SWAP stores
+     * FX spot there — a garbage value as a zero rate). */
     fwdCurve->numNodes = 0;
     fwdCurve->times[0] = 0.0;
-    fwdCurve->rates[0] = instruments[0].rate;
+    fwdCurve->rates[0] = (instruments[0].type == FX_SWAP) ? 0.0 : instruments[0].rate;
     fwdCurve->dfs[0]   = 1.0;
     fwdCurve->numNodes = 1;
 

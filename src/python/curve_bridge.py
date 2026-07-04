@@ -14,6 +14,12 @@ class InstrumentType:
     SWAP       = 2
     OIS_SWAP   = 3
     ASSET_SWAP = 4
+    # FX swap: at the front of a foreign curve.
+    #   'rate'  = FX spot (dom per for)
+    #   'price' = FX forward outright at 'maturity'
+    # Uses the passed OIS/discount curve as the domestic reference:
+    #   DF_for(T) = DF_dom(T) * spot / forward
+    FX_SWAP    = 5
 
 # ── C struct mirrors ────────────────────────────────────────────────────────
 # These must exactly match the C structs in dual_curve.h.
