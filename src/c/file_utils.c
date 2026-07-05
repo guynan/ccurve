@@ -179,21 +179,21 @@ int32_t loadInstrumentsFromDatesJSON(const char *filename, const char* anchorDat
 			}
 
 			if (strstr(line, "}") && strlen(typeStr) > 0 && strlen(matExStr) > 0) {
-				int32_t validInstrument = 0;
-				if      (strcmp(typeStr, "DEPOSIT")  == 0) { instruments[instCount].type = DEPOSIT;  validInstrument = 1; }
-				else if (strcmp(typeStr, "FUTURE")   == 0) { instruments[instCount].type = FUTURE;   validInstrument = 1; }
-				else if (strcmp(typeStr, "SWAP")     == 0) { instruments[instCount].type = SWAP;     validInstrument = 1; }
-				else if (strcmp(typeStr, "OIS_SWAP") == 0) { instruments[instCount].type = OIS_SWAP; validInstrument = 1; }
+				InstrumentType t = -1;
+				if      (strcmp(typeStr, "DEPOSIT")  == 0) t = DEPOSIT;
+				else if (strcmp(typeStr, "FUTURE")   == 0) t = FUTURE;
+				else if (strcmp(typeStr, "SWAP")     == 0) t = SWAP;
+				else if (strcmp(typeStr, "OIS_SWAP") == 0) t = OIS_SWAP;
 
-				if (validInstrument && instCount < maxInstruments) {
+				if ((int)t >= 0 && instCount < maxInstruments) {
 					DateTime startEvent = parseDateString(startExStr);
 					DateTime matEvent   = parseDateString(matExStr);
 
-					instruments[instCount].startTime        = calculateYearFraction(anchorDate, startEvent);
-					instruments[instCount].maturity         = calculateYearFraction(anchorDate, matEvent);
-					instruments[instCount].rate             = rate;
-					instruments[instCount].price            = price;
-					instruments[instCount].paymentFrequency = frequency;
+					MarketInstrument *ins = &instruments[instCount];
+					memset(ins, 0, sizeof(*ins));
+					ins->type      = t;
+					ins->startTime = calculateYearFraction(anchorDate, startEvent);
+					ins->maturity  = calculateYearFraction(anchorDate, matEvent);
 
 					/* Map DCF string to enum (default: Act/365) */
 					DayCountFraction dcf = DCF_ACT_365;
@@ -201,19 +201,39 @@ int32_t loadInstrumentsFromDatesJSON(const char *filename, const char* anchorDat
 					else if (strcmp(dcfStr, "30_360")       == 0) dcf = DCF_30_360;
 					else if (strcmp(dcfStr, "ACT_ACT_ISDA") == 0) dcf = DCF_ACT_ACT_ISDA;
 					else if (strcmp(dcfStr, "BUS_252")      == 0) dcf = DCF_BUS_252;
-					instruments[instCount].fixedDcf = dcf;
-					instruments[instCount].floatDcf = dcf;
 
 					/* Map BDA string to enum (default: none) */
 					BusinessDayAdjustment bda = BDA_NONE;
 					if      (strcmp(bdaStr, "FOLLOWING")          == 0) bda = BDA_FOLLOWING;
 					else if (strcmp(bdaStr, "MODIFIED_FOLLOWING") == 0) bda = BDA_MODIFIED_FOLLOWING;
 					else if (strcmp(bdaStr, "PRECEDING")          == 0) bda = BDA_PRECEDING;
-					instruments[instCount].bda = bda;
 
-					strncpy(instruments[instCount].calendarName, calStr,
-					        sizeof(instruments[instCount].calendarName) - 1);
-					instruments[instCount].calendarName[sizeof(instruments[instCount].calendarName) - 1] = '\0';
+					switch (t) {
+					case DEPOSIT:
+						ins->spec.deposit.rate = rate;
+						ins->spec.deposit.dcf  = dcf;
+						ins->spec.deposit.bda  = bda;
+						strncpy(ins->spec.deposit.calendarName, calStr,
+						        sizeof(ins->spec.deposit.calendarName) - 1);
+						break;
+					case FUTURE:
+						ins->spec.future.price = price;
+						ins->spec.future.dcf   = dcf;
+						strncpy(ins->spec.future.calendarName, calStr,
+						        sizeof(ins->spec.future.calendarName) - 1);
+						break;
+					case SWAP:
+					case OIS_SWAP:
+						ins->spec.swap.rate             = rate;
+						ins->spec.swap.paymentFrequency = frequency;
+						ins->spec.swap.fixedDcf         = dcf;
+						ins->spec.swap.floatDcf         = dcf;
+						ins->spec.swap.bda              = bda;
+						strncpy(ins->spec.swap.calendarName, calStr,
+						        sizeof(ins->spec.swap.calendarName) - 1);
+						break;
+					default: break;
+					}
 
 					instCount++;
 				}
@@ -294,16 +314,26 @@ int32_t loadDualCurvesFromJSON(const char *filename, InterestRateCurve *oisCurve
 			if (freqKey)  { char *colon = strchr(freqKey, ':'); if (colon) frequency = (int)strtol(colon + 1, NULL, 10); }
 
 			if (strstr(line, "}") && maturity > 0.0 && instCount < maxInstruments) {
-				if (strcmp(typeStr, "DEPOSIT") == 0) instruments[instCount].type = DEPOSIT;
-				else if (strcmp(typeStr, "FUTURE") == 0) instruments[instCount].type = FUTURE;
-				else if (strcmp(typeStr, "SWAP") == 0) instruments[instCount].type = SWAP;
+				MarketInstrument *ins = &instruments[instCount];
+				memset(ins, 0, sizeof(*ins));
+
+				if      (strcmp(typeStr, "DEPOSIT") == 0) ins->type = DEPOSIT;
+				else if (strcmp(typeStr, "FUTURE")  == 0) ins->type = FUTURE;
+				else if (strcmp(typeStr, "SWAP")    == 0) ins->type = SWAP;
 				else { maturity = -1.0; continue; }
 
-				instruments[instCount].startTime = startTime;
-				instruments[instCount].maturity = maturity;
-				instruments[instCount].rate = rate;
-				instruments[instCount].price = price;
-				instruments[instCount].paymentFrequency = frequency;
+				ins->startTime = startTime;
+				ins->maturity  = maturity;
+				switch (ins->type) {
+				case DEPOSIT: ins->spec.deposit.rate = rate;   break;
+				case FUTURE:  ins->spec.future.price = price;  break;
+				case SWAP:
+				case OIS_SWAP:
+					ins->spec.swap.rate             = rate;
+					ins->spec.swap.paymentFrequency = frequency;
+					break;
+				default: break;
+				}
 				instCount++;
 
 				typeStr[0] = '\0'; startTime = 0.0; maturity = -1.0; rate = -1.0; price = -1.0; frequency = -1;

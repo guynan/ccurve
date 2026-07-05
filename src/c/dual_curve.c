@@ -150,10 +150,11 @@ static int bootstrapDeposit(InterestRateCurve *fwd,
     int idx = fwd->numNodes;
     double t     = inst->maturity;
     double delta = t - inst->startTime;
-    double df    = 1.0 / (1.0 + inst->rate * delta);
+    double rate  = inst->spec.deposit.rate;
+    double df    = 1.0 / (1.0 + rate * delta);
     fwd->times[idx] = t;
     fwd->dfs[idx]   = df;
-    fwd->rates[idx] = (t > 0.0) ? (-log(df) / t) : inst->rate;
+    fwd->rates[idx] = (t > 0.0) ? (-log(df) / t) : rate;
     fwd->numNodes++;
     /* setupMonotoneConvex rebuilds the incremental spline used
      * by getDiscountFactor during mid-bootstrap node lookups.
@@ -173,7 +174,7 @@ static int bootstrapFuture(InterestRateCurve *fwd,
     double t_start    = inst->startTime;
     double t_end      = inst->maturity;
     double delta_t    = t_end - t_start;
-    double impliedFwd = (100.0 - inst->price) / 100.0;
+    double impliedFwd = (100.0 - inst->spec.future.price) / 100.0;
 
     /* Hull-White convexity adjustment: 0.5 * sigma^2 * t_start * t_end */
     if (params != NULL && params->convexity.sigma > 0.0) {
@@ -199,8 +200,8 @@ static int bootstrapSwap(InterestRateCurve *fwd,
     (void)params;
     int    idx          = fwd->numNodes;
     double t_maturity   = inst->maturity;
-    double swapRate     = inst->rate;
-    int    freq         = inst->paymentFrequency;
+    double swapRate     = inst->spec.swap.rate;
+    int    freq         = inst->spec.swap.paymentFrequency;
     int    totalPeriods = (int)round(t_maturity * freq);
     double dt           = 1.0 / (double)freq;
 
@@ -261,8 +262,8 @@ static int bootstrapFxSwap(InterestRateCurve *fwd,
     (void)params;
     int    idx = fwd->numNodes;
     double t   = inst->maturity;
-    double S   = inst->rate;   /* FX spot (dom per for)     */
-    double F   = inst->price;  /* FX forward outright       */
+    double S   = inst->spec.fxSwap.fxSpot;
+    double F   = inst->spec.fxSwap.fxForward;
 
     if (t <= 0.0 || S <= 0.0 || F <= 0.0) {
         fprintf(stderr, "bootstrapFxSwap: invalid params t=%g S=%g F=%g\n", t, S, F);
@@ -305,12 +306,21 @@ int bootstrapCurve(InterestRateCurve            *fwdCurve,
                    int32_t                        numInstruments,
                    const CurveConstructionParams *params)
 {
-    /* Anchor node: t=0, DF=1. Rate is only cosmetic (interpolation uses dfs),
-     * so avoid using inst[0].rate when the field is repurposed (FX_SWAP stores
-     * FX spot there — a garbage value as a zero rate). */
+    /* Anchor node: t=0, DF=1. Rate is cosmetic — interpolation uses dfs.
+     * Read the type-appropriate rate; FX_SWAP has none, so use 0.0. */
+    double anchorRate = 0.0;
+    switch (instruments[0].type) {
+    case DEPOSIT:  anchorRate = instruments[0].spec.deposit.rate; break;
+    case SWAP:
+    case OIS_SWAP: anchorRate = instruments[0].spec.swap.rate;    break;
+    case FUTURE:
+    case FX_SWAP:
+    case ASSET_SWAP:
+    default:       anchorRate = 0.0;                              break;
+    }
     fwdCurve->numNodes = 0;
     fwdCurve->times[0] = 0.0;
-    fwdCurve->rates[0] = (instruments[0].type == FX_SWAP) ? 0.0 : instruments[0].rate;
+    fwdCurve->rates[0] = anchorRate;
     fwdCurve->dfs[0]   = 1.0;
     fwdCurve->numNodes = 1;
 
@@ -527,6 +537,22 @@ void constructIborFromOisPlusSpread(const InterestRateCurve *ois,
 /*  DV01 and key-rate DV01                                             */
 /* ================================================================== */
 
+/* Bump the rate-side quote on one instrument by delta.
+ * Futures use `-price` (100 - price = rate), so a +1bp rate bump is -0.01 in price.
+ * FX_SWAP has no scalar rate to bump — DV01 is defined w.r.t. IR moves only. */
+static void bumpInstrumentRate(MarketInstrument *inst, double deltaRate)
+{
+    switch (inst->type) {
+    case DEPOSIT:  inst->spec.deposit.rate += deltaRate;              break;
+    case SWAP:
+    case OIS_SWAP: inst->spec.swap.rate    += deltaRate;              break;
+    case FUTURE:   inst->spec.future.price -= deltaRate * 100.0;      break;
+    case FX_SWAP:
+    case ASSET_SWAP:
+    default:       /* no-op */                                        break;
+    }
+}
+
 double computeParallelDV01(const MarketInstrument  *instruments,
                            int32_t                  numInstruments,
                            const InterestRateCurve *oisCurve,
@@ -539,14 +565,11 @@ double computeParallelDV01(const MarketInstrument  *instruments,
     bootstrapCurve(&base, oisCurve, instruments, numInstruments, NULL);
     double rBase = solveParSwapRate(&base, oisCurve, maturity, frequency);
 
-    /* Bumped par rate: shift all instrument rates / prices by +1bp */
+    /* Bumped par rate: shift every instrument's rate quote by +1bp */
     MarketInstrument bumped[MAX_NODES];
     for (int32_t i = 0; i < numInstruments; i++) {
         bumped[i] = instruments[i];
-        if (instruments[i].type == FUTURE)
-            bumped[i].price -= 0.01;   /* -1bp in price = +1bp in rate */
-        else
-            bumped[i].rate  += 1e-4;
+        bumpInstrumentRate(&bumped[i], 1e-4);
     }
     InterestRateCurve bumpedCurve;
     memset(&bumpedCurve, 0, sizeof(bumpedCurve));
@@ -574,10 +597,7 @@ void computeKeyRateDV01(const MarketInstrument  *instruments,
         for (int32_t k = 0; k < numInstruments; k++)
             bumped[k] = instruments[k];
 
-        if (instruments[j].type == FUTURE)
-            bumped[j].price -= 0.01;
-        else
-            bumped[j].rate  += 1e-4;
+        bumpInstrumentRate(&bumped[j], 1e-4);
 
         InterestRateCurve bc;
         memset(&bc, 0, sizeof(bc));
@@ -677,13 +697,8 @@ double calculateSwapDV01(VanillaSwap *swap,
     MarketInstrument *dnInst = malloc(numInstruments * sizeof(MarketInstrument));
     for (int i = 0; i < numInstruments; i++) {
         upInst[i] = dnInst[i] = marketInstruments[i];
-        if (marketInstruments[i].type == FUTURE) {
-            upInst[i].price -= bpBumpSize * 100.0;
-            dnInst[i].price += bpBumpSize * 100.0;
-        } else {
-            upInst[i].rate += bpBumpSize;
-            dnInst[i].rate -= bpBumpSize;
-        }
+        bumpInstrumentRate(&upInst[i], +bpBumpSize);
+        bumpInstrumentRate(&dnInst[i], -bpBumpSize);
     }
 
     InterestRateCurve fwdUp, fwdDn;
@@ -723,7 +738,7 @@ void run_calibration_bridge(InterestRateCurve *fwdCurve,
     /* Anchor OIS short end to deposit rate and insert CB boundary node */
     for (int32_t i = 0; i < numInstruments; i++) {
         if (instruments[i].type == DEPOSIT) {
-            setOisAnchorRate(oisCurve, instruments[i].rate);
+            setOisAnchorRate(oisCurve, instruments[i].spec.deposit.rate);
             break;
         }
     }
@@ -820,7 +835,7 @@ int32_t main(int32_t argc, char **argv)
     /* Anchor OIS short end to deposit rate and ensure continuity at CB boundary */
     for (int32_t i = 0; i < numInstruments; i++) {
         if (marketData[i].type == DEPOSIT) {
-            setOisAnchorRate(&oisCurve, marketData[i].rate);
+            setOisAnchorRate(&oisCurve, marketData[i].spec.deposit.rate);
             break;
         }
     }
@@ -865,7 +880,7 @@ int32_t main(int32_t argc, char **argv)
         for (int32_t m = 0; m < numInstruments; m++) {
             if (marketData[m].type == SWAP &&
                 fabs(marketData[m].maturity - tenors[i]) < 1e-2) {
-                mkt = marketData[m].rate;
+                mkt = marketData[m].spec.swap.rate;
                 break;
             }
         }

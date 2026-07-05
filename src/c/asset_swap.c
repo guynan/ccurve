@@ -116,10 +116,14 @@ double computeAssetSwapDV01(const AssetSwapSpec     *spec,
     MarketInstrument bumped[MAX_NODES];
     for (int32_t i = 0; i < numFwdInstruments; i++) {
         bumped[i] = fwdInstruments[i];
-        if (fwdInstruments[i].type == FUTURE)
-            bumped[i].price -= 0.01;
-        else
-            bumped[i].rate  += 1e-4;
+        switch (bumped[i].type) {
+        case DEPOSIT:  bumped[i].spec.deposit.rate += 1e-4;  break;
+        case SWAP:
+        case OIS_SWAP: bumped[i].spec.swap.rate    += 1e-4;  break;
+        case FUTURE:   bumped[i].spec.future.price -= 0.01;  break;
+        default:       /* FX_SWAP / ASSET_SWAP not bumped in rates DV01 */
+                       break;
+        }
     }
     InterestRateCurve fwdBump;
     memset(&fwdBump, 0, sizeof(fwdBump));

@@ -936,10 +936,6 @@ int blp_fetch_curve_instruments(BlpSession       *s,
 
         const TickerClass tc = classify_ticker(spec.ticker);
 
-        /* Set rate / price */
-        inst.rate  = pr.rate;
-        inst.price = pr.price;
-
         switch (tc) {
 
         /* ---------------------------------------------------------------- */
@@ -948,19 +944,18 @@ int blp_fetch_curve_instruments(BlpSession       *s,
             inst.type             = DEPOSIT;
             inst.startTime        = 0.0;   /* T+2 spot, simplified to 0 */
             inst.maturity         = deposit_tenor_years(spec.ticker);
-            inst.paymentFrequency = 4;     /* quarterly */
-            inst.fixedDcf         = DCF_ACT_360;
-            inst.floatDcf         = DCF_ACT_360;
-            inst.bda              = BDA_MODIFIED_FOLLOWING;
-            safe_copy(inst.calendarName, sizeof(inst.calendarName), "USD");
+            inst.spec.deposit.rate = pr.rate;
+            inst.spec.deposit.dcf  = DCF_ACT_360;
+            inst.spec.deposit.bda  = BDA_MODIFIED_FOLLOWING;
+            safe_copy(inst.spec.deposit.calendarName,
+                      sizeof(inst.spec.deposit.calendarName), "USD");
             break;
 
         /* ---------------------------------------------------------------- */
         case TICKER_FUTURE:
         /* ---------------------------------------------------------------- */
         {
-            inst.type  = FUTURE;
-            inst.price = pr.price;
+            inst.type = FUTURE;
 
             /*
              * Maturity date: use LAST_TRADEABLE_DT if available.
@@ -991,41 +986,44 @@ int blp_fetch_curve_instruments(BlpSession       *s,
                 }
             }
 
-            inst.maturity         = maturity_yf;
-            inst.startTime        = maturity_yf - 0.25;
+            inst.maturity          = maturity_yf;
+            inst.startTime         = maturity_yf - 0.25;
             if (inst.startTime < 0.0) inst.startTime = 0.0;
-            inst.paymentFrequency = 4;
-            inst.fixedDcf         = DCF_ACT_360;
-            inst.floatDcf         = DCF_ACT_360;
-            inst.bda              = BDA_MODIFIED_FOLLOWING;
-            safe_copy(inst.calendarName, sizeof(inst.calendarName), "USD");
+            inst.spec.future.price = pr.price;
+            inst.spec.future.dcf   = DCF_ACT_360;
+            safe_copy(inst.spec.future.calendarName,
+                      sizeof(inst.spec.future.calendarName), "USD");
             break;
         }
 
         /* ---------------------------------------------------------------- */
         case TICKER_SWAP:
         /* ---------------------------------------------------------------- */
-            inst.type             = SWAP;
-            inst.startTime        = 0.0;
-            inst.maturity         = swap_tenor_years(spec.ticker);
-            inst.paymentFrequency = 2;     /* semi-annual fixed, quarterly float */
-            inst.fixedDcf         = DCF_30_360;
-            inst.floatDcf         = DCF_ACT_360;
-            inst.bda              = BDA_MODIFIED_FOLLOWING;
-            safe_copy(inst.calendarName, sizeof(inst.calendarName), "USD");
+            inst.type      = SWAP;
+            inst.startTime = 0.0;
+            inst.maturity  = swap_tenor_years(spec.ticker);
+            inst.spec.swap.rate             = pr.rate;
+            inst.spec.swap.paymentFrequency = 2;
+            inst.spec.swap.fixedDcf         = DCF_30_360;
+            inst.spec.swap.floatDcf         = DCF_ACT_360;
+            inst.spec.swap.bda              = BDA_MODIFIED_FOLLOWING;
+            safe_copy(inst.spec.swap.calendarName,
+                      sizeof(inst.spec.swap.calendarName), "USD");
             break;
 
         /* ---------------------------------------------------------------- */
         case TICKER_OIS_SWAP:
         /* ---------------------------------------------------------------- */
-            inst.type             = OIS_SWAP;
-            inst.startTime        = 0.0;
-            inst.maturity         = swap_tenor_years(spec.ticker);
-            inst.paymentFrequency = 4;     /* quarterly compounded */
-            inst.fixedDcf         = DCF_ACT_360;
-            inst.floatDcf         = DCF_ACT_360;
-            inst.bda              = BDA_MODIFIED_FOLLOWING;
-            safe_copy(inst.calendarName, sizeof(inst.calendarName), "USD");
+            inst.type      = OIS_SWAP;
+            inst.startTime = 0.0;
+            inst.maturity  = swap_tenor_years(spec.ticker);
+            inst.spec.swap.rate             = pr.rate;
+            inst.spec.swap.paymentFrequency = 4;
+            inst.spec.swap.fixedDcf         = DCF_ACT_360;
+            inst.spec.swap.floatDcf         = DCF_ACT_360;
+            inst.spec.swap.bda              = BDA_MODIFIED_FOLLOWING;
+            safe_copy(inst.spec.swap.calendarName,
+                      sizeof(inst.spec.swap.calendarName), "USD");
             break;
 
         /* ---------------------------------------------------------------- */
@@ -1192,10 +1190,8 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
         MarketInstrument &inst = out[written];
         std::memset(&inst, 0, sizeof(MarketInstrument));
 
-        inst.fixedDcf = DCF_ACT_365;
-        inst.floatDcf = DCF_ACT_365;
-        inst.bda      = BDA_MODIFIED_FOLLOWING;
-        safe_copy(inst.calendarName, sizeof(inst.calendarName), "NZD");
+        /* Per-variant conventions get set inside the switch below. */
+        const char *cal_nzd = "NZD";
 
         switch (spec.itype) {
 
@@ -1219,21 +1215,29 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
                     : static_cast<double>(spec.meeting_n) / 7.0;
             }
 
-            inst.type             = OIS_SWAP;
-            inst.startTime        = 0.0;
-            inst.maturity         = maturity_yf;
-            inst.rate             = pr.rate;
-            inst.paymentFrequency = 4;
+            inst.type      = OIS_SWAP;
+            inst.startTime = 0.0;
+            inst.maturity  = maturity_yf;
+            inst.spec.swap.rate             = pr.rate;
+            inst.spec.swap.paymentFrequency = 4;
+            inst.spec.swap.fixedDcf         = DCF_ACT_365;
+            inst.spec.swap.floatDcf         = DCF_ACT_365;
+            inst.spec.swap.bda              = BDA_MODIFIED_FOLLOWING;
+            safe_copy(inst.spec.swap.calendarName,
+                      sizeof(inst.spec.swap.calendarName), cal_nzd);
             break;
         }
 
         case NZD_DEPOSIT:
             if (!pr.rate_ok) continue;
-            inst.type             = DEPOSIT;
-            inst.startTime        = 0.0;
-            inst.maturity         = spec.tenor_y;
-            inst.rate             = pr.rate;
-            inst.paymentFrequency = 4;
+            inst.type      = DEPOSIT;
+            inst.startTime = 0.0;
+            inst.maturity  = spec.tenor_y;
+            inst.spec.deposit.rate = pr.rate;
+            inst.spec.deposit.dcf  = DCF_ACT_365;
+            inst.spec.deposit.bda  = BDA_MODIFIED_FOLLOWING;
+            safe_copy(inst.spec.deposit.calendarName,
+                      sizeof(inst.spec.deposit.calendarName), cal_nzd);
             break;
 
         case NZD_FUTURE:
@@ -1251,21 +1255,28 @@ int blp_fetch_nzd_curve_instruments(BlpSession       *s,
                 const int  q = (d >= '1' && d <= '9') ? (d - '0') : 1;
                 maturity_yf  = static_cast<double>(q) * 0.25;
             }
-            inst.type             = FUTURE;
-            inst.startTime        = std::max(0.0, maturity_yf - 0.25);
-            inst.maturity         = maturity_yf;
-            inst.price            = pr.price;
-            inst.paymentFrequency = 4;
+            inst.type      = FUTURE;
+            inst.startTime = std::max(0.0, maturity_yf - 0.25);
+            inst.maturity  = maturity_yf;
+            inst.spec.future.price = pr.price;
+            inst.spec.future.dcf   = DCF_ACT_365;
+            safe_copy(inst.spec.future.calendarName,
+                      sizeof(inst.spec.future.calendarName), cal_nzd);
             break;
         }
 
         case NZD_SWAP:
             if (!pr.rate_ok) continue;
-            inst.type             = SWAP;
-            inst.startTime        = 0.0;
-            inst.maturity         = spec.tenor_y;
-            inst.rate             = pr.rate;
-            inst.paymentFrequency = 4;   /* quarterly BKBM */
+            inst.type      = SWAP;
+            inst.startTime = 0.0;
+            inst.maturity  = spec.tenor_y;
+            inst.spec.swap.rate             = pr.rate;
+            inst.spec.swap.paymentFrequency = 4;   /* quarterly BKBM */
+            inst.spec.swap.fixedDcf         = DCF_ACT_365;
+            inst.spec.swap.floatDcf         = DCF_ACT_365;
+            inst.spec.swap.bda              = BDA_MODIFIED_FOLLOWING;
+            safe_copy(inst.spec.swap.calendarName,
+                      sizeof(inst.spec.swap.calendarName), cal_nzd);
             break;
         }
 

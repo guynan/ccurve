@@ -64,6 +64,7 @@ typedef enum {
 
 typedef struct {
     RateIndexType         indexType;       /* default 0 = IBOR_TERM                 */
+    int                   _pad0;           /* explicit align to double              */
     double                tenorYears;      /* observation tenor: 0.25=3M, 0.5=6M    */
     int                   resetLagDays;    /* biz days before period start (-2=IBOR) */
     int                   paymentLagDays;  /* biz days after period end              */
@@ -74,18 +75,59 @@ typedef struct {
     char                  calendarName[32];
 } FloatingRateIndex;
 
+/* -----------------------------------------------------------------
+ * MarketInstrument is a tagged union.
+ *   `type`       — selects which member of `spec` is live
+ *   `startTime`  — common: start-of-period year fraction (0 for spot-start)
+ *   `maturity`   — common: end-of-period year fraction
+ *   `spec.*`     — variant-specific fields
+ *
+ * DO NOT read the wrong variant. Consumers must switch on `type`
+ * before touching any spec field.
+ * ----------------------------------------------------------------- */
 typedef struct {
-    InstrumentType      type;
-    double              startTime;
-    double              maturity;
-    double              rate;
-    double              price;
-    int32_t             paymentFrequency;
-    DayCountFraction    fixedDcf;         /* day count for fixed leg  (0 = Act/365) */
-    DayCountFraction    floatDcf;         /* day count for float leg  (0 = Act/365) */
-    BusinessDayAdjustment bda;            /* business day convention  (0 = none)    */
-    char                calendarName[32]; /* e.g. "USD" — loaded at parse time      */
-    FloatingRateIndex   floatIndex;       /* full float-leg conventions (zero = default IBOR) */
+    double                rate;              /* deposit rate                    */
+    DayCountFraction      dcf;               /* day count (0 = Act/365)         */
+    BusinessDayAdjustment bda;               /* business-day convention         */
+    char                  calendarName[32];  /* e.g. "USD"                      */
+} DepositSpec;
+
+typedef struct {
+    double                price;             /* futures quote (100 - fwd*100)   */
+    DayCountFraction      dcf;               /* accrual day count               */
+    int                   _pad;              /* explicit align to char array    */
+    char                  calendarName[32];
+} FutureSpec;
+
+typedef struct {
+    double                rate;              /* par swap rate                   */
+    int32_t               paymentFrequency;  /* fixed-leg payments per year     */
+    DayCountFraction      fixedDcf;
+    DayCountFraction      floatDcf;
+    BusinessDayAdjustment bda;
+    char                  calendarName[32];
+    FloatingRateIndex     floatIndex;        /* full float-leg conventions      */
+} SwapSpec;                                  /* also used for OIS_SWAP          */
+
+typedef struct {
+    double                fxSpot;            /* dom per for at inception        */
+    double                fxForward;         /* dom per for at maturity         */
+    char                  calendarName[32];
+} FxSwapSpec;
+
+typedef union {
+    DepositSpec deposit;
+    FutureSpec  future;
+    SwapSpec    swap;    /* SWAP + OIS_SWAP  */
+    FxSwapSpec  fxSwap;
+} InstrumentSpec;
+
+typedef struct {
+    InstrumentType type;
+    int            _pad0;      /* align startTime to 8                */
+    double         startTime;
+    double         maturity;
+    InstrumentSpec spec;
 } MarketInstrument;
 
 typedef struct InterestRateCurve {
